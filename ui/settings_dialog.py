@@ -11,9 +11,13 @@ from PySide6.QtCore import Qt
 
 
 SETTINGS_FILE = os.path.expanduser("~/.video-to-script-settings.json")
+# Fallback to app directory if home dir is sandboxed
+_SETTINGS_FILE_APP = os.path.join(os.path.dirname(__file__), "..", "settings.json")
+_SETTINGS_FILE_APP = os.path.abspath(_SETTINGS_FILE_APP)
 
 DEFAULT_SETTINGS = {
     "openai_api_key": "",
+    "openai_base_url": "",
     "openai_model": "gpt-4o-mini",
     "whisper_model": "base",
     "scene_threshold": 35.0,
@@ -23,10 +27,25 @@ DEFAULT_SETTINGS = {
 }
 
 
+def _get_settings_file():
+    """优先用 home 目录，权限不足时用应用目录"""
+    try:
+        if os.path.exists(SETTINGS_FILE):
+            return SETTINGS_FILE
+        # 测试 home 目录是否可写
+        with open(SETTINGS_FILE, "w") as f:
+            json.dump({}, f)
+        os.remove(SETTINGS_FILE)
+        return SETTINGS_FILE
+    except Exception:
+        return _SETTINGS_FILE_APP
+
+
 def load_settings() -> dict:
-    if os.path.exists(SETTINGS_FILE):
+    path = _get_settings_file()
+    if os.path.exists(path):
         try:
-            with open(SETTINGS_FILE, "r") as f:
+            with open(path, "r") as f:
                 saved = json.load(f)
                 return {**DEFAULT_SETTINGS, **saved}
         except Exception:
@@ -35,7 +54,8 @@ def load_settings() -> dict:
 
 
 def save_settings(settings: dict):
-    with open(SETTINGS_FILE, "w") as f:
+    path = _get_settings_file()
+    with open(path, "w") as f:
         json.dump(settings, f, ensure_ascii=False, indent=2)
 
 
@@ -74,8 +94,18 @@ class SettingsDialog(QDialog):
         key_row.addWidget(toggle_btn)
         ai_layout.addRow("API Key:", key_row)
 
+        self.base_url_input = QLineEdit()
+        self.base_url_input.setPlaceholderText("https://api.openai.com/v1（留空用默认）")
+        self.base_url_input.setText(self.settings.get("openai_base_url", ""))
+        ai_layout.addRow("API 地址:", self.base_url_input)
+
+        base_hint = QLabel("💡 国内网络无法访问 OpenAI 时，可填入中转站地址")
+        base_hint.setStyleSheet("color: #86868B; font-size: 11px;")
+        base_hint.setWordWrap(True)
+        ai_layout.addRow("", base_hint)
+
         self.model_combo = QComboBox()
-        self.model_combo.addItems(["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"])
+        self.model_combo.addItems(["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "deepseek-chat", "deepseek-reasoner"])
         idx = self.model_combo.findText(self.settings.get("openai_model", "gpt-4o-mini"))
         if idx >= 0:
             self.model_combo.setCurrentIndex(idx)
@@ -167,6 +197,7 @@ class SettingsDialog(QDialog):
 
     def _accept(self):
         self.settings["openai_api_key"] = self.api_key_input.text().strip()
+        self.settings["openai_base_url"] = self.base_url_input.text().strip()
         self.settings["openai_model"] = self.model_combo.currentText()
         self.settings["whisper_model"] = self.whisper_combo.currentText()
         lang_map = {0: "", 1: "zh", 2: "en", 3: "ja", 4: "ko"}
@@ -174,7 +205,11 @@ class SettingsDialog(QDialog):
         threshold_map = {0: 25.0, 1: 30.0, 2: 35.0, 3: 40.0, 4: 50.0}
         self.settings["scene_threshold"] = threshold_map.get(self.threshold_combo.currentIndex(), 35.0)
         self.settings["cookie_file"] = self.cookie_input.text().strip()
-        save_settings(self.settings)
+        try:
+            save_settings(self.settings)
+        except Exception as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "保存失败", f"设置保存失败：{e}\n设置将在本次运行中生效，但不会持久化保存。")
         self.accept()
 
     def get_settings(self) -> dict:

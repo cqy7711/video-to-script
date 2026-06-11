@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Video to Script — macOS 桌面应用
+Video to Script — 桌面应用
 从视频文件自动提取剧本结构、钩子分析和人物图谱
 """
 
@@ -18,8 +18,12 @@ from ui.styles import APP_STYLESHEET
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Video to Script")
-    app.setApplicationVersion("1.0.0")
-    app.setStyle("macOS")
+    app.setApplicationVersion("2.1.7")
+    # macOS 使用原生风格，Windows/Linux 使用 Fusion
+    if sys.platform == "darwin":
+        app.setStyle("macOS")
+    else:
+        app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLESHEET)
 
     window = MainWindow()

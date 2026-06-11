@@ -5,7 +5,7 @@ import os
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QComboBox, QPushButton, QGroupBox,
-    QFormLayout, QDialogButtonBox
+    QFormLayout, QDialogButtonBox, QFileDialog
 )
 from PySide6.QtCore import Qt
 
@@ -19,6 +19,7 @@ DEFAULT_SETTINGS = {
     "scene_threshold": 35.0,
     "min_scene_duration": 2.0,
     "language": "",
+    "cookie_file": "",
 }
 
 
@@ -130,6 +131,34 @@ class SettingsDialog(QDialog):
         scene_group.setLayout(scene_layout)
         layout.addWidget(scene_group)
 
+        # 视频下载
+        download_group = QGroupBox("视频下载")
+        download_layout = QFormLayout()
+        download_layout.setSpacing(10)
+
+        cookie_row = QHBoxLayout()
+        self.cookie_input = QLineEdit()
+        self.cookie_input.setPlaceholderText("导出浏览器的 Cookie 文件路径...")
+        self.cookie_input.setText(self.settings.get("cookie_file", ""))
+        cookie_row.addWidget(self.cookie_input)
+        cookie_browse = QPushButton("选择")
+        cookie_browse.setFixedWidth(60)
+        def _browse_cookie():
+            path, _ = QFileDialog.getOpenFileName(self, "选择 Cookie 文件", "", "所有文件 (*);;文本文件 (*.txt)")
+            if path:
+                self.cookie_input.setText(path)
+        cookie_browse.clicked.connect(_browse_cookie)
+        cookie_row.addWidget(cookie_browse)
+        download_layout.addRow("Cookie 文件:", cookie_row)
+
+        cookie_hint = QLabel("💡 部分平台（抖音/B站）需要登录才能下载高清视频，可从浏览器导出 Cookie")
+        cookie_hint.setStyleSheet("color: #86868B; font-size: 11px;")
+        cookie_hint.setWordWrap(True)
+        download_layout.addRow("", cookie_hint)
+
+        download_group.setLayout(download_layout)
+        layout.addWidget(download_group)
+
         # 按钮
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btn_box.accepted.connect(self._accept)
@@ -144,6 +173,7 @@ class SettingsDialog(QDialog):
         self.settings["language"] = lang_map.get(self.lang_combo.currentIndex(), "")
         threshold_map = {0: 25.0, 1: 30.0, 2: 35.0, 3: 40.0, 4: 50.0}
         self.settings["scene_threshold"] = threshold_map.get(self.threshold_combo.currentIndex(), 35.0)
+        self.settings["cookie_file"] = self.cookie_input.text().strip()
         save_settings(self.settings)
         self.accept()
 

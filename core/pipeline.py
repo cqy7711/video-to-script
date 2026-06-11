@@ -20,6 +20,9 @@ class VideoInfo:
     height: int = 0
     fps: float = 0.0
     size_mb: float = 0.0
+    source: str = "local"        # "local" or "url"
+    platform: str = ""           # 来源平台（抖音/YouTube/B站等）
+    title: str = ""              # 视频标题（链接下载时）
 
 
 @dataclass
@@ -252,13 +255,17 @@ class VideoToScriptPipeline:
         except Exception as e:
             return {"hooks_analysis": f"❌ LLM 分析失败: {str(e)}", "script_structure": "", "character_map": "", "rewrite_suggestions": ""}
 
-    def run(self, video_path: str, progress_cb: Callable = None) -> AnalysisResult:
+    def run(self, video_path: str, progress_cb: Callable = None,
+            source: str = "local", platform: str = "", video_title: str = "") -> AnalysisResult:
         result = AnalysisResult()
         try:
             self._ensure_ffmpeg()
             if progress_cb:
                 progress_cb("正在获取视频信息...")
             result.video_info = self.step1_get_video_info(video_path)
+            result.video_info.source = source
+            result.video_info.platform = platform
+            result.video_info.title = video_title
             audio_path = self.step2_extract_audio(video_path, progress_cb)
             whisper_result = self.step3_transcribe(audio_path, progress_cb)
             result.transcript_text = whisper_result.get("text", "")
@@ -280,13 +287,18 @@ class VideoToScriptPipeline:
 
     def _generate_report(self, result: AnalysisResult) -> str:
         vi = result.video_info
+        source_info = ""
+        if vi.source == "url" and vi.platform:
+            source_info = f"\n- 来源: {vi.platform}（链接下载）"
+        if vi.title:
+            source_info += f"\n- 标题: {vi.title}"
         report = f"""# 短剧拆解报告
 
 ## 视频信息
 - 文件: {os.path.basename(vi.path)}
 - 时长: {vi.duration:.1f}秒
 - 分辨率: {vi.width}×{vi.height}
-- 文件大小: {vi.size_mb:.1f}MB
+- 文件大小: {vi.size_mb:.1f}MB{source_info}
 
 ## 转写文本
 

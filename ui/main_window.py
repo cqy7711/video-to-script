@@ -322,6 +322,8 @@ class MainWindow(QMainWindow):
     _download_progress_signal = Signal(str)   # msg
     _preview_done_signal = Signal(object)     # result
     _download_done_signal = Signal(object)    # result
+    _batch_url_progress_signal = Signal(int, int, str)  # (current, total, msg) 多集批量进度
+    _batch_url_done_signal = Signal()                   # 多集批量完成
 
     def __init__(self):
         super().__init__()
@@ -336,6 +338,7 @@ class MainWindow(QMainWindow):
         self.view_mode = "single"        # "single" | "batch" | "summary"
         self.is_analyzing = False
         self.is_downloading = False
+        self.is_batch_url_analyzing = False  # 多集链接批量分析进行中标记
         self.video_path = ""
         self.video_source = ""
         self._setup_ui()
@@ -430,6 +433,65 @@ class MainWindow(QMainWindow):
         ufi_layout.addWidget(self.url_file_detail)
         ufi_layout.addStretch()
         url_layout.addWidget(self.url_file_info)
+
+        # ── 多集链接批量输入区域 ──
+        batch_url_frame = QFrame()
+        batch_url_frame.setObjectName("batchUrlFrame")
+        batch_url_frame.setStyleSheet(
+            "QFrame#batchUrlFrame { background-color: #F8F9FE; border: 1px dashed #B0CAFF; "
+            "border-radius: 10px; padding: 4px; }"
+        )
+        bfu_layout = QVBoxLayout(batch_url_frame)
+        bfu_layout.setSpacing(8)
+
+        # 标题行
+        bfu_header = QHBoxLayout()
+        bfu_icon = QLabel("📋")
+        bfu_icon.setStyleSheet("font-size: 18px;")
+        bfu_header.addWidget(bfu_icon)
+        bfu_title = QLabel("多集链接批量分析")
+        bfu_title.setStyleSheet("font-size: 14px; font-weight: 600; color: #1D1D1F;")
+        bfu_header.addWidget(bfu_title)
+        bfu_header.addStretch()
+        self.batch_url_count_label = QLabel("")
+        self.batch_url_count_label.setStyleSheet("font-size: 11px; color: #86868B;")
+        bfu_header.addWidget(self.batch_url_count_label)
+        bfu_layout.addLayout(bfu_header)
+
+        # 多行链接输入框
+        self.batch_url_input = QTextEdit()
+        self.batch_url_input.setPlaceholderText(
+            "一行粘贴一个视频链接，例如：\n"
+            "https://v.douyin.com/xxxxx\n"
+            "https://www.youtube.com/watch?v=xxxxx\n"
+            "https://www.bilibili.com/video/BVxxxxx"
+        )
+        self.batch_url_input.setMaximumHeight(100)
+        self.batch_url_input.setStyleSheet(
+            "QTextEdit { border: 1px solid #E5E5EA; border-radius: 8px; "
+            "padding: 8px 12px; font-size: 12px; background-color: #FFFFFF; "
+            "font-family: 'Menlo', 'Consolas', monospace; line-height: 1.5; }"
+            "QTextEdit:focus { border-color: #007AFF; }"
+        )
+        self.batch_url_input.textChanged.connect(self._on_batch_url_text_changed)
+        bfu_layout.addWidget(self.batch_url_input)
+
+        # 批量分析按钮
+        bfu_btn_row = QHBoxLayout()
+        bfu_btn_row.addStretch()
+        self.batch_url_analyze_btn = QPushButton("🚀 批量下载分析")
+        self.batch_url_analyze_btn.setEnabled(False)
+        self.batch_url_analyze_btn.setStyleSheet(
+            "QPushButton { background-color: #5856D6; color: white; border: none; "
+            "border-radius: 8px; padding: 10px 28px; font-weight: 600; font-size: 14px; }"
+            "QPushButton:hover { background-color: #403E99; }"
+            "QPushButton:disabled { background-color: #C7C7CC; color: #E5E5EA; }"
+        )
+        bfu_btn_row.addWidget(self.batch_url_analyze_btn)
+        bfu_btn_row.addStretch()
+        bfu_layout.addLayout(bfu_btn_row)
+
+        url_layout.addWidget(batch_url_frame)
         self.input_stack.addWidget(url_page)
 
         content_layout.addWidget(self.input_stack)
@@ -603,12 +665,15 @@ class MainWindow(QMainWindow):
         self.url_zone.preview_btn.clicked.connect(
             lambda: self.url_zone.preview_requested.emit(self.url_zone.url_input.text().strip())
         )
+        self.batch_url_analyze_btn.clicked.connect(self._on_batch_url_analyze)
         # 线程安全信号 → 槽
         self._progress_signal.connect(self._handle_progress)
         self._analyze_done_signal.connect(self._handle_analyze_done)
         self._download_progress_signal.connect(self._handle_download_progress)
         self._preview_done_signal.connect(self._handle_preview_result)
         self._download_done_signal.connect(self._handle_download_result)
+        self._batch_url_progress_signal.connect(self._handle_batch_url_progress)
+        self._batch_url_done_signal.connect(self._handle_batch_url_done)
 
     # ─── 线程安全的 UI 更新槽 ───
 
@@ -1428,6 +1493,198 @@ class MainWindow(QMainWindow):
                     run = p.add_run(part)
                     if i % 2 == 1:  # 奇数部分是粗体内容
                         run.bold = True
+
+    # ─── 多集链接批量下载分析 ───
+
+    def _on_batch_url_text_changed(self):
+        """多集链接输入框文本变化，更新链接计数"""
+        urls = self._parse_batch_urls()
+        count = len(urls)
+        if count > 0:
+            self.batch_url_count_label.setText(f"已输入 {count} 个有效链接")
+            self.batch_url_analyze_btn.setEnabled(True)
+        else:
+            self.batch_url_count_label.setText("")
+            self.batch_url_analyze_btn.setEnabled(False)
+
+    def _parse_batch_urls(self):
+        """解析多集链接输入框中的 URL 列表"""
+        text = self.batch_url_input.toPlainText().strip()
+        if not text:
+            return []
+        urls = []
+        for line in text.split("\n"):
+            line = line.strip()
+            if line and line.startswith("http"):
+                urls.append(line)
+        return urls
+
+    def _on_batch_url_analyze(self):
+        """多集链接批量下载分析：逐个下载 + 分析"""
+        urls = self._parse_batch_urls()
+        if not urls or self.is_batch_url_analyzing or self.is_analyzing:
+            return
+
+        self.is_batch_url_analyzing = True
+        self.batch_url_analyze_btn.setEnabled(False)
+        self.batch_url_analyze_btn.setText("⏳ 批量分析中...")
+        self.batch_url_input.setReadOnly(True)
+
+        # 清空之前的批量结果
+        self.batch_results = []
+        self.view_mode = "batch"
+
+        self.progress_frame.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.step_label.setText(f"多集批量分析：0/{len(urls)} 准备中...")
+        self.step_label.setStyleSheet("color: #5856D6; font-size: 12px;")
+
+        cookie_file = self.settings.get("cookie_file", "")
+
+        def worker():
+            total = len(urls)
+            for i, url in enumerate(urls):
+                # 报告当前进度
+                self._batch_url_progress_signal.emit(i + 1, total, f"正在下载第 {i+1}/{total} 集...")
+
+                # 第一步：下载
+                try:
+                    dl_result = download_video(url, progress_cb=lambda msg: None, cookie_file=cookie_file)
+                    if not dl_result.success:
+                        # 下载失败，跳过这集，记录错误
+                        err_result = AnalysisResult(
+                            video_info=None,
+                            transcript_segments=[],
+                            enriched_segments=None,
+                            scenes=[],
+                            hooks_analysis="",
+                            script="",
+                            character_map="",
+                            rewrite_suggestions="",
+                            north_america="",
+                            bgm_info="",
+                            error=f"第{i+1}集下载失败: {dl_result.error}"
+                        )
+                        self.batch_results.append(err_result)
+                        continue
+
+                    video_path = dl_result.video_path
+                    platform = dl_result.platform
+                    title = dl_result.title
+                except Exception as e:
+                    err_result = AnalysisResult(
+                        video_info=None,
+                        transcript_segments=[],
+                        enriched_segments=None,
+                        scenes=[],
+                        hooks_analysis="",
+                        script="",
+                        character_map="",
+                        rewrite_suggestions="",
+                        north_america="",
+                        bgm_info="",
+                        error=f"第{i+1}集下载异常: {e}"
+                    )
+                    self.batch_results.append(err_result)
+                    continue
+
+                # 第二步：分析
+                self._batch_url_progress_signal.emit(i + 1, total, f"第 {i+1}/{total} 集分析中...")
+
+                try:
+                    pipeline = VideoToScriptPipeline(
+                        whisper_model=self.settings.get("whisper_model", "base"),
+                        scene_threshold=self.settings.get("scene_threshold", 35.0),
+                        min_scene_duration=self.settings.get("min_scene_duration", 2.0),
+                        openai_api_key=self.settings.get("openai_api_key", ""),
+                        openai_model=self.settings.get("openai_model", "gpt-4o-mini"),
+                        openai_base_url=self.settings.get("openai_base_url", ""),
+                        language=self.settings.get("language", "") or None,
+                    )
+                    result = pipeline.run(
+                        video_path,
+                        progress_cb=lambda msg: None,
+                        source="url",
+                        platform=platform,
+                        video_title=title,
+                    )
+                    self.batch_results.append(result)
+                except Exception as e:
+                    err_result = AnalysisResult(
+                        video_info=None,
+                        transcript_segments=[],
+                        enriched_segments=None,
+                        scenes=[],
+                        hooks_analysis="",
+                        script="",
+                        character_map="",
+                        rewrite_suggestions="",
+                        north_america="",
+                        bgm_info="",
+                        error=f"第{i+1}集分析异常: {e}"
+                    )
+                    self.batch_results.append(err_result)
+
+            # 全部完成
+            self._batch_url_done_signal.emit()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @Slot(int, int, str)
+    def _handle_batch_url_progress(self, current, total, msg):
+        """多集批量分析进度更新"""
+        pct = int(current / total * 100) if total > 0 else 0
+        self.progress_bar.setValue(pct)
+        self.step_label.setText(msg)
+        self.step_label.setStyleSheet("color: #5856D6; font-size: 12px;")
+
+    @Slot()
+    def _handle_batch_url_done(self):
+        """多集批量分析完成"""
+        self.is_batch_url_analyzing = False
+        self.batch_url_analyze_btn.setEnabled(True)
+        self.batch_url_analyze_btn.setText("🚀 批量下载分析")
+        self.batch_url_input.setReadOnly(False)
+
+        success_count = sum(1 for r in self.batch_results if not r.error)
+        fail_count = sum(1 for r in self.batch_results if r.error)
+
+        self.progress_bar.setValue(100)
+        if fail_count == 0:
+            self.step_label.setText(f"✅ 批量分析完成！共 {success_count} 集全部成功")
+            self.step_label.setStyleSheet("color: #34C759; font-size: 12px;")
+        else:
+            self.step_label.setText(f"⚠️ 批量分析完成：{success_count} 集成功，{fail_count} 集失败")
+            self.step_label.setStyleSheet("color: #FF9500; font-size: 12px;")
+
+        # 显示集数选择器和总结按钮
+        if len(self.batch_results) > 0:
+            self.tab_widget.setVisible(True)
+            self.expand_btn.setVisible(True)
+            self._set_results_expanded(True)
+
+            # 如果有成功的，设置当前结果为第一个成功的
+            for r in self.batch_results:
+                if not r.error:
+                    self.result = r
+                    break
+
+            if len(self.batch_results) > 1:
+                self.episode_selector_frame.setVisible(True)
+                self._populate_episode_selector()
+                self.summary_btn.setVisible(True)
+                self.summary_btn.setEnabled(True)
+
+            # 显示批量分析按钮
+            self.batch_analyze_btn.setVisible(True)
+            self.batch_analyze_btn.setEnabled(True)
+            self.batch_analyze_btn.setText("▶ 批量分析所有片段")
+
+            self.export_md_btn.setEnabled(True)
+            self.export_docx_btn.setEnabled(True)
+
+            # 显示批量汇总视图
+            self._display_batch_results()
 
     # ─── 批量分析与多集管理 ───
 

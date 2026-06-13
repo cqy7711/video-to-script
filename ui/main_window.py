@@ -178,7 +178,20 @@ class ExportDialog(QDialog):
         fmt_layout.addWidget(self.fmt_docx_rb)
         layout.addWidget(fmt_group)
 
-        # ─── 4. 合并/单独 ───
+        # ─── 4. 版本选择 ───
+        ver_group = QGroupBox("导出版本")
+        ver_layout = QHBoxLayout(ver_group)
+        self.ver_concise_rb = QRadioButton("精简版（核心要点）")
+        self.ver_full_rb = QRadioButton("正常版（完整分析）")
+        self.ver_full_rb.setChecked(True)
+        ver_btn_group = QButtonGroup(self)
+        ver_btn_group.addButton(self.ver_concise_rb)
+        ver_btn_group.addButton(self.ver_full_rb)
+        ver_layout.addWidget(self.ver_concise_rb)
+        ver_layout.addWidget(self.ver_full_rb)
+        layout.addWidget(ver_group)
+
+        # ─── 5. 合并/单独 ───
         mode_group = QGroupBox("导出方式")
         mode_layout = QHBoxLayout(mode_group)
         self.mode_merge_rb = QRadioButton("合并为一个文件")
@@ -221,6 +234,10 @@ class ExportDialog(QDialog):
     def get_selected_tabs(self):
         """返回选中的tab key列表"""
         return [cb.property("tab_key") for cb in self.tab_cbs if cb.isChecked()]
+
+    def get_version(self):
+        """返回 'concise' 或 'full'"""
+        return "concise" if self.ver_concise_rb.isChecked() else "full"
 
     def get_format(self):
         """返回 'md' 或 'docx'"""
@@ -719,7 +736,9 @@ class MainWindow(QMainWindow):
         progress_frame.setVisible(False)
         content_layout.addWidget(progress_frame)
 
-        # ── 展开/收起按钮 ──
+        # ── 展开/收起按钮 + 精简版切换 ──
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(12)
         self.expand_btn = QPushButton("▼ 展开分析结果")
         self.expand_btn.setVisible(False)
         self.expand_btn.setStyleSheet(
@@ -728,7 +747,21 @@ class MainWindow(QMainWindow):
             "QPushButton:hover { background-color: #E8F0FE; border-color: #007AFF; }"
         )
         self.expand_btn.setCursor(Qt.PointingHandCursor)
-        content_layout.addWidget(self.expand_btn, alignment=Qt.AlignCenter)
+        mode_row.addWidget(self.expand_btn)
+        mode_row.addStretch()
+        self.mode_toggle_btn = QPushButton("📝 精简版")
+        self.mode_toggle_btn.setVisible(False)
+        self.mode_toggle_btn.setCheckable(True)
+        self.mode_toggle_btn.setStyleSheet(
+            "QPushButton { background-color: #F5F5F7; color: #5856D6; border: 1px solid #D1D1D6; "
+            "border-radius: 8px; padding: 6px 16px; font-weight: 500; font-size: 13px; }"
+            "QPushButton:checked { background-color: #EDEDFC; color: #007AFF; border-color: #007AFF; }"
+            "QPushButton:hover { background-color: #EDEDFC; }"
+        )
+        self.mode_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.mode_toggle_btn.toggled.connect(self._on_mode_toggle)
+        mode_row.addWidget(self.mode_toggle_btn)
+        content_layout.addLayout(mode_row)
 
         # ── Tab 内容区域 ──
         self.tab_widget = QTabWidget()
@@ -769,6 +802,7 @@ class MainWindow(QMainWindow):
         self.na_tab.setReadOnly(True)
         self.na_tab.setToolTip("双击可放大查看")
         self.tab_widget.addTab(self.na_tab, "🌎 北美改编")
+        self.tab_widget.currentChanged.connect(self._refresh_current_tab)
 
         # 双击放大
         self.hooks_tab.mouseDoubleClickEvent = lambda e: self._expand_tab("钩子分析", self.hooks_tab.toMarkdown())
@@ -1073,6 +1107,78 @@ class MainWindow(QMainWindow):
         dialog = ContentExpandDialog(title, content, is_markdown=True, parent=self)
         dialog.exec()
 
+    @staticmethod
+    def _split_concise_full(text):
+        """从LLM输出中分离精简版和详细版
+        返回 (concise, full) 元组。若无分隔符，返回 (text, text)。
+        """
+        delimiter = "---FULL---"
+        if delimiter in text:
+            parts = text.split(delimiter, 1)
+            concise = parts[0].strip()
+            full = parts[1].strip() if len(parts) > 1 else text
+            return concise, full
+        return text.strip(), text.strip()
+
+    def _on_mode_toggle(self, checked):
+        """精简版/正常版切换"""
+        if checked:
+            self.mode_toggle_btn.setText("📖 正常版")
+        else:
+            self.mode_toggle_btn.setText("📝 精简版")
+        # 重新渲染当前Tab
+        self._refresh_current_tab()
+
+    def _refresh_current_tab(self):
+        """根据当前模式重新渲染当前激活的Tab"""
+        idx = self.tab_widget.currentIndex()
+        # 只处理分析类Tab (2-6)，转写和场景不改
+        if idx >= 2 and idx <= 6:
+            self._display_current_analysis_tab(idx)
+
+    def _display_current_analysis_tab(self, tab_idx):
+        """根据当前模式渲染指定分析Tab"""
+        if not self.result:
+            return
+        show_concise = self.mode_toggle_btn.isChecked()
+        tab_map = {
+            2: ("hooks", self.hooks_tab),
+            3: ("script", self.script_tab),
+            4: ("chars", self.characters_tab),
+            5: ("rewrite", self.rewrite_tab),
+            6: ("na", self.na_tab),
+        }
+        if tab_idx not in tab_map:
+            return
+        key, widget = tab_map[tab_idx]
+        # 获取对应字段
+        field_map = {
+            "hooks": self.result.hooks_analysis,
+            "script": self.result.script_structure,
+            "chars": self.result.character_map,
+            "rewrite": self.result.rewrite_suggestions,
+            "na": self.result.north_america,
+        }
+        text = field_map.get(key, "")
+        if not text:
+            return
+        concise, full = self._split_concise_full(text)
+        display = concise if show_concise else full
+        # 用对应的标题和颜色渲染
+        title_map = {
+            "hooks": ("🪝 钩子结构分析", "#FF3B30", "#FFE5E5"),
+            "script": ("📜 结构化剧本", "#5856D6", "#EDEDFC"),
+            "chars": ("👥 人物图谱", "#FF9500", "#FFF3E0"),
+            "rewrite": ("✍ 改写建议", "#5856D6", "#EDEDFC"),
+            "na": ("🌎 北美改编可行性分析", "#AF52DE", "#F5E8FF"),
+        }
+        title, color, bg = title_map.get(key, ("分析", "#007AFF", "#E8F0FE"))
+        if not text.startswith("⚠️") and not text.startswith("❌"):
+            html = self._md_to_enriched_html(display, title, color, bg)
+            widget.setHtml(html)
+        else:
+            widget.setMarkdown(display)
+
     def _display_results(self):
         if not self.result:
             return
@@ -1258,43 +1364,52 @@ class MainWindow(QMainWindow):
 
         # ── 钩子分析 Tab ──
         hooks_md = self.result.hooks_analysis or "需要配置 OpenAI API Key"
+        _, hooks_full = self._split_concise_full(hooks_md)
         if not hooks_md.startswith("⚠️") and not hooks_md.startswith("❌"):
-            hooks_html = self._md_to_enriched_html(hooks_md, "🪝 钩子结构分析", "#FF3B30", "#FFE5E5")
+            hooks_html = self._md_to_enriched_html(hooks_full, "🪝 钩子结构分析", "#FF3B30", "#FFE5E5")
             self.hooks_tab.setHtml(hooks_html)
         else:
             self.hooks_tab.setMarkdown(hooks_md)
 
         # ── 结构化剧本 Tab ──
         script_md = self.result.script_structure or "需要配置 OpenAI API Key"
+        _, script_full = self._split_concise_full(script_md)
         if not script_md.startswith("❌"):
-            script_html = self._md_to_enriched_html(script_md, "📜 结构化剧本", "#5856D6", "#EDEDFC")
+            script_html = self._md_to_enriched_html(script_full, "📜 结构化剧本", "#5856D6", "#EDEDFC")
             self.script_tab.setHtml(script_html)
         else:
             self.script_tab.setMarkdown(script_md)
 
         # ── 人物图谱 Tab ──
         chars_md = self.result.character_map or "需要配置 OpenAI API Key"
+        _, chars_full = self._split_concise_full(chars_md)
         if not chars_md.startswith("❌"):
-            chars_html = self._md_to_enriched_html(chars_md, "👥 人物图谱", "#FF9500", "#FFF3E0")
+            chars_html = self._md_to_enriched_html(chars_full, "👥 人物图谱", "#FF9500", "#FFF3E0")
             self.characters_tab.setHtml(chars_html)
         else:
             self.characters_tab.setMarkdown(chars_md)
 
         # ── 改写建议 Tab ──
         rewrite_md = self.result.rewrite_suggestions or ""
+        _, rewrite_full = self._split_concise_full(rewrite_md)
         if rewrite_md and not rewrite_md.startswith("❌") and not rewrite_md.startswith("⚠️"):
-            rewrite_html = self._md_to_enriched_html(rewrite_md, "✍ 改写建议", "#5856D6", "#EDEDFC")
+            rewrite_html = self._md_to_enriched_html(rewrite_full, "✍ 改写建议", "#5856D6", "#EDEDFC")
             self.rewrite_tab.setHtml(rewrite_html)
         else:
             self.rewrite_tab.setMarkdown(rewrite_md or "暂无改写建议（需要配置 OpenAI API Key）")
 
         # ── 北美改编 Tab（基于爆款短剧分析框架）──
         na_md = self.result.north_america or ""
+        _, na_full = self._split_concise_full(na_md)
         if na_md and not na_md.startswith("❌") and not na_md.startswith("⚠️"):
-            na_html = self._md_to_enriched_html(na_md, "🌎 北美改编可行性分析", "#AF52DE", "#F5E8FF")
+            na_html = self._md_to_enriched_html(na_full, "🌎 北美改编可行性分析", "#AF52DE", "#F5E8FF")
             self.na_tab.setHtml(na_html)
         else:
             self.na_tab.setMarkdown(na_md or "暂无北美改编分析（需要配置 OpenAI API Key）")
+
+        # 显示精简版切换按钮
+        self.mode_toggle_btn.setVisible(True)
+        self.mode_toggle_btn.setChecked(False)  # 默认正常版
 
     def _speaker_color(self, speaker):
         """为角色分配固定颜色"""
@@ -1474,6 +1589,7 @@ class MainWindow(QMainWindow):
         fmt = dialog.get_format()
         merge = dialog.is_merge()
         include_summary = dialog.is_summary_selected()
+        version = dialog.get_version()  # 'concise' or 'full' 
 
         if not selected_episodes and not include_summary:
             self.step_label.setText("❌ 请至少选择一个集数或全局总结")
@@ -1504,9 +1620,9 @@ class MainWindow(QMainWindow):
 
         try:
             if fmt == "md":
-                exported_files = self._export_markdown(results_to_export, selected_tabs, merge, include_summary, desktop)
+                exported_files = self._export_markdown(results_to_export, selected_tabs, merge, include_summary, desktop, version)
             else:
-                exported_files = self._export_docx(results_to_export, selected_tabs, merge, include_summary, desktop)
+                exported_files = self._export_docx(results_to_export, selected_tabs, merge, include_summary, desktop, version)
         except Exception as e:
             self.step_label.setText(f"❌ 导出失败: {e}")
             self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
@@ -1522,7 +1638,7 @@ class MainWindow(QMainWindow):
                 f"已成功导出 {len(exported_files)} 个文件到桌面：\n\n{file_list}"
             )
 
-    def _build_md_content(self, result, selected_tabs, ep_label=""):
+    def _build_md_content(self, result, selected_tabs, ep_label="", version='full'):
         """为单个结果构建Markdown内容"""
         lines = []
         if ep_label:
@@ -1553,12 +1669,14 @@ class MainWindow(QMainWindow):
         for tab_key, (title, content) in tab_data.items():
             if tab_key in selected_tabs and content and not content.startswith("⚠️") and not content.startswith("❌"):
                 lines.append(f"## {title}\n")
-                lines.append(content)
+                concise, full = self._split_concise_full(content)
+                display = concise if version == "concise" else full
+                lines.append(display)
                 lines.append("")
 
         return "\n".join(lines)
 
-    def _build_docx_for_result(self, result, selected_tabs, doc=None, ep_label=""):
+    def _build_docx_for_result(self, result, selected_tabs, doc=None, ep_label="", version='full'):
         """为单个结果构建Word文档内容（可传入现有doc用于合并）"""
         from docx import Document
         from docx.shared import Inches, RGBColor
@@ -1602,12 +1720,14 @@ class MainWindow(QMainWindow):
         }
         for tab_key, (title, content) in tab_data.items():
             if tab_key in selected_tabs and content and not content.startswith("⚠️") and not content.startswith("❌"):
+                concise, full = self._split_concise_full(content)
+                display = concise if version == 'concise' else full
                 doc.add_heading(title, level=2)
-                self._add_markdown_to_doc(doc, content)
+                self._add_markdown_to_doc(doc, display)
 
         return doc
 
-    def _export_markdown(self, results, selected_tabs, merge, include_summary, desktop):
+    def _export_markdown(self, results, selected_tabs, merge, include_summary, desktop, version='full'):
         """导出Markdown文件"""
         exported = []
         if merge:
@@ -1640,7 +1760,7 @@ class MainWindow(QMainWindow):
                 exported.append(path)
         return exported
 
-    def _export_docx(self, results, selected_tabs, merge, include_summary, desktop):
+    def _export_docx(self, results, selected_tabs, merge, include_summary, desktop, version='full'):
         """导出Word文件"""
         from docx import Document
         from docx.enum.text import WD_ALIGN_PARAGRAPH

@@ -1831,7 +1831,7 @@ class MainWindow(QMainWindow):
                     chars = r.character_map[:800] if r.character_map else "无"
 
                     # 结构化剧本（含场景描述）
-                    script = r.script[:1200] if r.script else "无"
+                    script = r.script_structure[:1200] if r.script_structure else "无"
 
                     # 改写建议
                     rewrite = r.rewrite_suggestions[:600] if r.rewrite_suggestions else "无"

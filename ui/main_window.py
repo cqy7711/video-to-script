@@ -767,6 +767,26 @@ class MainWindow(QMainWindow):
         mode_row.addWidget(self.mode_toggle_btn)
         content_layout.addLayout(mode_row)
 
+        # ── 短视频/预告片提示横幅 ──
+        self.short_clip_banner = QLabel(
+            "⚠️ 检测到短视频/预告片（<15秒），分析内容主要基于视频标题和描述。如需分析完整剧集，请提供剧集合集链接。"
+        )
+        self.short_clip_banner.setStyleSheet("""
+            QLabel {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #FFF3E0, stop:1 #FFE0B2);
+                border: 1px solid #FFB74D;
+                border-radius: 8px;
+                padding: 10px 16px;
+                color: #E65100;
+                font-size: 13px;
+                font-weight: 500;
+            }
+        """)
+        self.short_clip_banner.setWordWrap(True)
+        self.short_clip_banner.setVisible(False)
+        content_layout.addWidget(self.short_clip_banner)
+
         # ── Tab 内容区域 ──
         self.tab_widget = QTabWidget()
         self.tab_widget.setVisible(False)
@@ -945,12 +965,20 @@ class MainWindow(QMainWindow):
         if result.success:
             self.video_path = result.video_path
             self.video_source = "url"
+            self._download_title = result.title
+            self._download_platform = result.platform
+            self._download_description = result.description
             size_mb = os.path.getsize(result.video_path) / (1024 * 1024)
             dur_str = f"{int(result.duration // 60)}:{int(result.duration % 60):02d}" if result.duration else "未知"
             self.url_file_name.setText(f"📹 {result.title}")
             self.url_file_detail.setText(
                 f"平台: {result.platform} · 时长: {dur_str} · 大小: {size_mb:.1f}MB"
             )
+            # 短视频提示
+            if result.duration and result.duration < 15:
+                self.url_file_detail.setText(
+                    f"平台: {result.platform} · 时长: {dur_str} · 大小: {size_mb:.1f}MB · ⚠️ 短视频/预告片"
+                )
             self.progress_bar.setValue(65)
             self.step_label.setText("✅ 视频下载完成，可以开始分析")
             self.step_label.setStyleSheet("color: #34C759; font-size: 12px;")
@@ -1090,6 +1118,7 @@ class MainWindow(QMainWindow):
                 source=self.video_source,
                 platform=getattr(self, '_download_platform', ''),
                 video_title=getattr(self, '_download_title', ''),
+                video_description=getattr(self, '_download_description', ''),
             )
             self._analyze_done_signal.emit()
 
@@ -1186,6 +1215,12 @@ class MainWindow(QMainWindow):
     def _display_results(self):
         if not self.result:
             return
+
+        # ── 短视频/预告片提示 ──
+        if self.result.is_short_clip:
+            self.short_clip_banner.setVisible(True)
+        else:
+            self.short_clip_banner.setVisible(False)
 
         # ── 转写文本 Tab ──
         enriched = self.result.enriched_segments
@@ -2108,6 +2143,7 @@ class MainWindow(QMainWindow):
                         source="url",
                         platform=platform,
                         video_title=title,
+                        video_description=dl_result.description,
                     )
                     self.batch_results.append(result)
                 except Exception as e:
@@ -2606,6 +2642,7 @@ class MainWindow(QMainWindow):
             "north_america": r.north_america,
             "full_report": r.full_report,
             "error": r.error,
+            "is_short_clip": r.is_short_clip,
             "hooks_analysis_concise": r.hooks_analysis_concise,
             "script_structure_concise": r.script_structure_concise,
             "character_map_concise": r.character_map_concise,
@@ -2624,6 +2661,7 @@ class MainWindow(QMainWindow):
                 "source": vi.source,
                 "platform": vi.platform,
                 "title": vi.title,
+                "description": vi.description,
             }
         # scenes 含 frame_path（图片文件可能已不存在，仅保存路径）
         for sc in r.scenes:
@@ -2654,6 +2692,7 @@ class MainWindow(QMainWindow):
                 source=vi_dict.get("source", "local"),
                 platform=vi_dict.get("platform", ""),
                 title=vi_dict.get("title", ""),
+                description=vi_dict.get("description", ""),
             )
         scenes = []
         for sc_dict in d.get("scenes", []):
@@ -2679,6 +2718,7 @@ class MainWindow(QMainWindow):
             north_america=d.get("north_america", ""),
             full_report=d.get("full_report", ""),
             error=d.get("error", ""),
+            is_short_clip=d.get("is_short_clip", False),
             hooks_analysis_concise=d.get("hooks_analysis_concise", ""),
             script_structure_concise=d.get("script_structure_concise", ""),
             character_map_concise=d.get("character_map_concise", ""),

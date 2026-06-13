@@ -24,6 +24,7 @@ class VideoInfo:
     source: str = "local"        # "local" or "url"
     platform: str = ""           # 来源平台（抖音/YouTube/B站等）
     title: str = ""              # 视频标题（链接下载时）
+    description: str = ""        # 视频描述/简介（链接下载时）
 
 
 @dataclass
@@ -51,6 +52,7 @@ class AnalysisResult:
     north_america: str = ""
     full_report: str = ""
     error: str = ""
+    is_short_clip: bool = False   # 是否为短视频/预告片（<15秒）
     # 精简版分析结果（按需生成，缓存于此）
     hooks_analysis_concise: str = ""
     script_structure_concise: str = ""
@@ -290,7 +292,7 @@ class VideoToScriptPipeline:
 1. **标注说话人**：判断每句台词是谁说的，给出合理的人物名称
 2. **区分对白与背景音乐(BGM)**：如果是BGM歌词，标记为BGM；如果是对白，标记为DIALOGUE
 
-视频时长: {video_info.duration:.1f}秒
+{self._build_video_context(video_info)}
 
 ---
 
@@ -377,6 +379,20 @@ class VideoToScriptPipeline:
                 raise
         raise last_error
 
+
+    @staticmethod
+    def _build_video_context(video_info):
+        """构建视频上下文信息（标题/描述/短视频提示）"""
+        ctx = f"- 时长: {video_info.duration:.1f}秒 | 分辨率: {video_info.width}x{video_info.height}"
+        if video_info.title:
+            ctx += f"\n- 标题: {video_info.title}"
+        if video_info.description:
+            desc = video_info.description[:500]  # 限制描述长度
+            ctx += f"\n- 描述: {desc}"
+        if video_info.duration < 15:
+            ctx += "\n- ⚠️ 注意：这是一个短视频/预告片（<15秒），语音转写文本可能非常简短，请优先基于标题和描述中的剧情信息进行分析，并结合转写文本进行补充。"
+        return ctx
+
     def _llm_hooks(self, client, transcript, scene_desc, video_info, language_hint):
         # 长视频转写截断
         MAX_TRANSCRIPT_LEN = 12000
@@ -388,7 +404,7 @@ class VideoToScriptPipeline:
         prompt = f"""你是专业的短剧钩子分析专家。请对以下视频进行完整的「单集钩子与留存分析」。
 
 ## 视频信息
-- 时长: {video_info.duration:.1f}秒 | 分辨率: {video_info.width}×{video_info.height}
+{self._build_video_context(video_info)}
 
 ## 场景切割
 {scene_desc}
@@ -551,7 +567,7 @@ class VideoToScriptPipeline:
         prompt = f"""你是专业的短剧剧本结构分析专家。请对以下视频进行完整的「结构化剧本与场景分析」。
 
 ## 视频信息
-- 时长: {video_info.duration:.1f}秒
+{self._build_video_context(video_info)}
 
 ## 场景切割
 {scene_desc}
@@ -705,7 +721,7 @@ class VideoToScriptPipeline:
         prompt = f"""你是专业的短剧人物关系分析专家。请对以下视频进行完整的「人物图谱与角色塑造分析」。
 
 ## 视频信息
-- 时长: {video_info.duration:.1f}秒
+{self._build_video_context(video_info)}
 
 ## 语音转写文本
 {transcript}
@@ -815,7 +831,7 @@ class VideoToScriptPipeline:
         prompt = f"""你是专业的短剧改写顾问。请对以下视频进行完整的「改写方向与实操建议分析」。
 
 ## 视频信息
-- 时长: {video_info.duration:.1f}秒
+{self._build_video_context(video_info)}
 
 ## 场景切割
 {scene_desc}
@@ -946,7 +962,7 @@ class VideoToScriptPipeline:
         prompt = f"""你是专业的北美短剧改编顾问，精通 TikTok 美加区短剧市场。请基于以下视频内容，输出一份完整的「北美改编分析报告」。
 
 ## 视频信息
-- 时长: {video_info.duration:.1f}秒
+{self._build_video_context(video_info)}
 
 ## 场景切割
 {scene_desc}
@@ -1149,7 +1165,8 @@ class VideoToScriptPipeline:
         return results
 
     def run(self, video_path: str, progress_cb: Callable = None,
-            source: str = "local", platform: str = "", video_title: str = "") -> AnalysisResult:
+            source: str = "local", platform: str = "", video_title: str = "",
+            video_description: str = "") -> AnalysisResult:
         result = AnalysisResult()
         try:
             self._ensure_ffmpeg()
@@ -1159,6 +1176,13 @@ class VideoToScriptPipeline:
             result.video_info.source = source
             result.video_info.platform = platform
             result.video_info.title = video_title
+            result.video_info.description = video_description
+
+            # 短视频/预告片检测（<15秒）
+            if result.video_info.duration < 15:
+                result.is_short_clip = True
+                if progress_cb:
+                    progress_cb("⚠️ 检测到短视频（<15秒），可能是预告片/引流片，将结合视频描述进行分析...")
             audio_path = self.step2_extract_audio(video_path, progress_cb)
             whisper_result = self.step3_transcribe(audio_path, progress_cb)
             result.transcript_text = whisper_result.get("text", "")

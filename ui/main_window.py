@@ -1848,33 +1848,84 @@ class MainWindow(QMainWindow):
         def worker():
             try:
                 from openai import OpenAI
-                kwargs = {"api_key": self.settings.get("openai_api_key", ""), "timeout": 120.0}
+                kwargs = {"api_key": self.settings.get("openai_api_key", ""), "timeout": 180.0}
                 base_url = self.settings.get("openai_base_url", "")
                 if base_url:
                     kwargs["base_url"] = base_url
                 client = OpenAI(**kwargs)
 
-                # 汇总所有集的关键信息
-                summaries = []
+                # 汇总所有集的详细数据（更充分地传入原始内容）
+                episode_details = []
                 for i, r in enumerate(self.batch_results):
                     if r.error:
-                        summaries.append(f"第{i+1}集: 分析失败({r.error})")
+                        episode_details.append(f"第{i+1}集: 分析失败({r.error})")
                         continue
                     vi = r.video_info
                     dur = f"{vi.duration:.0f}s" if vi else "未知"
+                    ep_title = vi.title if vi and vi.title else f"第{i+1}集"
+
+                    # 转写文本（截取前1500字，保留关键对白）
+                    transcript_parts = []
+                    if r.enriched_segments:
+                        for seg in r.enriched_segments[:30]:
+                            speaker = getattr(seg, 'speaker', '') or ''
+                            text = getattr(seg, 'text', '') or ''
+                            if speaker and text:
+                                transcript_parts.append(f"{speaker}：{text}")
+                            elif text:
+                                transcript_parts.append(text)
+                    transcript_text = "\n".join(transcript_parts)[:1500]
+
+                    # 钩子分析
                     hooks = r.hooks_analysis[:800] if r.hooks_analysis else "无"
-                    chars = r.character_map[:600] if r.character_map else "无"
-                    summaries.append(f"第{i+1}集(时长{dur}):\n钩子分析: {hooks}\n人物图谱: {chars}")
 
-                all_summaries = "\n\n---\n\n".join(summaries)
+                    # 人物图谱
+                    chars = r.character_map[:800] if r.character_map else "无"
 
-                prompt = f"""你是专业的短剧全剧分析专家。以下是一部短剧各集的分析数据，请生成一份「全剧总结报告」。
+                    # 结构化剧本（含场景描述）
+                    script = r.script[:1200] if r.script else "无"
 
-{all_summaries}
+                    # 改写建议
+                    rewrite = r.rewrite_suggestions[:600] if r.rewrite_suggestions else "无"
+
+                    detail = (
+                        f"## 第{i+1}集《{ep_title}》（时长{dur}）\n"
+                        f"### 转写对白\n{transcript_text}\n\n"
+                        f"### 钩子分析\n{hooks}\n\n"
+                        f"### 人物图谱\n{chars}\n\n"
+                        f"### 结构化剧本\n{script}\n\n"
+                        f"### 改写建议\n{rewrite}"
+                    )
+                    episode_details.append(detail)
+
+                all_episodes = "\n\n---\n\n".join(episode_details)
+
+                prompt = f"""你是专业的短剧全剧分析专家。以下是一部短剧各集的完整分析数据，请生成一份「全剧总结报告」。
+
+{all_episodes}
 
 ---
 
-请按以下5个维度输出全剧总结：
+请按以下结构输出全剧总结（必须严格按此格式）：
+
+# 全剧总结报告
+
+---
+
+## 第一部分：逐集详细故事描述
+
+对每一集，严格按以下格式输出：
+
+### 第X集《集名》
+**故事概况**：这一集讲了什么（3-5句话概括核心剧情）
+**关键情节**：按时间顺序列出本集发生的所有关键事件（至少5个情节点）
+**人物状态**：本集出现的主要人物、他们的目标/情绪/处境
+**钩子与转折**：本集开头用了什么钩子、结尾在哪里断住
+**情绪曲线**：本集的情绪走向
+
+---
+
+## 第二部分：全剧综合分析
 
 ### 一、全剧爆款公式
 用一句话总结整部剧的爆款逻辑
@@ -1885,12 +1936,12 @@ class MainWindow(QMainWindow):
 - 核心人物关系变化
 
 ### 三、钩子体系评估
-- 各集钩子类型分布
+- 各集钩子类型分布（用表格）
 - 最强钩子与最弱钩子
 - 付费墙位置建议（第3/6/10集结尾）
 
 ### 四、情绪曲线总览
-- 全剧情绪起伏
+- 全剧情绪起伏（用表格展示各集情绪关键词）
 - 最强的3个情绪高潮点
 - 情绪断裂点（如有）
 
@@ -1899,15 +1950,15 @@ class MainWindow(QMainWindow):
 - 整体改写方向推荐
 - 北美市场适配要点
 
-用 Markdown 表格和结构化文字输出。"""
+用 Markdown 表格和结构化文字输出，确保逐集描述丰富详尽。"""
 
                 resp = client.chat.completions.create(
                     model=self.settings.get("openai_model", "gpt-4o-mini"),
                     messages=[
-                        {"role": "system", "content": "你是短剧全剧分析专家，擅长多集连贯性分析和改编策略。"},
+                        {"role": "system", "content": "你是短剧全剧分析专家，擅长逐集故事解读、多集连贯性分析和改编策略。你的逐集描述必须详尽、具体、基于实际对白内容，不能泛泛而谈。"},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.7, max_tokens=4000
+                    temperature=0.7, max_tokens=8000
                 )
                 summary_md = resp.choices[0].message.content
 

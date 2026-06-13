@@ -336,6 +336,7 @@ class MainWindow(QMainWindow):
         self.batch_results = []          # 批量分析结果列表（持久化，不清空）
         self.current_episode_idx = 0     # 当前查看的集数索引
         self.view_mode = "single"        # "single" | "batch" | "summary"
+        self.cached_summary_md = ""      # 全局总结缓存（生成后保存在界面中）
         self.is_analyzing = False
         self.is_downloading = False
         self.is_batch_url_analyzing = False  # 多集链接批量分析进行中标记
@@ -503,55 +504,70 @@ class MainWindow(QMainWindow):
         self.analyze_btn.setFixedHeight(42)
         content_layout.addWidget(self.analyze_btn, alignment=Qt.AlignCenter)
 
-        # 批量分析按钮（单集分析完成后显示）
-        self.batch_analyze_btn = QPushButton("▶ 批量分析所有片段")
-        self.batch_analyze_btn.setObjectName("analyzeBtn")
-        self.batch_analyze_btn.setVisible(False)
-        self.batch_analyze_btn.setEnabled(False)
-        self.batch_analyze_btn.setFixedHeight(42)
-        content_layout.addWidget(self.batch_analyze_btn, alignment=Qt.AlignCenter)
-
-        # 集数选择器（批量分析完成后显示）
-        self.episode_selector_frame = QFrame()
-        self.episode_selector_frame.setVisible(False)
-        self.episode_selector_frame.setStyleSheet(
-            "QFrame { background-color: #F5F5F7; border-radius: 8px; padding: 8px 12px; }"
+        # ── 批量分析工具栏（统一管理所有批量相关按钮）──
+        self.batch_toolbar = QFrame()
+        self.batch_toolbar.setObjectName("batchToolbar")
+        self.batch_toolbar.setVisible(False)
+        self.batch_toolbar.setStyleSheet(
+            "QFrame#batchToolbar { background-color: #F5F5F7; border-radius: 10px; "
+            "border: 1px solid #E5E5EA; padding: 2px; }"
         )
-        es_layout = QHBoxLayout(self.episode_selector_frame)
-        es_layout.setContentsMargins(8, 4, 8, 4)
-        es_label = QLabel("查看集数:")
-        es_label.setStyleSheet("font-size: 13px; color: #1D1D1F; font-weight: 500;")
-        es_layout.addWidget(es_label)
+        tb_layout = QHBoxLayout(self.batch_toolbar)
+        tb_layout.setContentsMargins(12, 8, 12, 8)
+        tb_layout.setSpacing(12)
+
+        # 返回批量视图按钮（单集查看时显示）
+        self.back_to_batch_btn = QPushButton("← 返回汇总")
+        self.back_to_batch_btn.setVisible(False)
+        self.back_to_batch_btn.setStyleSheet(
+            "QPushButton { background-color: #FFFFFF; color: #5856D6; border: 1px solid #5856D6; "
+            "border-radius: 6px; padding: 6px 14px; font-weight: 500; font-size: 12px; }"
+            "QPushButton:hover { background-color: #EDEDFC; }"
+        )
+        self.back_to_batch_btn.clicked.connect(self._on_back_to_batch)
+        tb_layout.addWidget(self.back_to_batch_btn)
+
+        # 集数选择器
+        es_label = QLabel("📋 查看集数:")
+        es_label.setStyleSheet("font-size: 12px; color: #1D1D1F; font-weight: 500;")
+        tb_layout.addWidget(es_label)
         from PySide6.QtWidgets import QComboBox
         self.episode_combo = QComboBox()
+        self.episode_combo.setMinimumWidth(200)
         self.episode_combo.setStyleSheet(
             "QComboBox { border: 1px solid #E5E5EA; border-radius: 6px; "
-            "padding: 4px 8px; font-size: 13px; background-color: #FFFFFF; }"
+            "padding: 5px 10px; font-size: 12px; background-color: #FFFFFF; }"
             "QComboBox:hover { border-color: #007AFF; }"
         )
         self.episode_combo.currentIndexChanged.connect(self._on_episode_changed)
-        es_layout.addWidget(self.episode_combo)
-        es_layout.addStretch()
-        content_layout.addWidget(self.episode_selector_frame)
+        tb_layout.addWidget(self.episode_combo, 1)
 
-        # 返回批量结果按钮（单集查看时显示）
-        self.back_to_batch_btn = QPushButton("📦 返回批量结果")
-        self.back_to_batch_btn.setObjectName("backToBatchBtn")
-        self.back_to_batch_btn.setVisible(False)
-        self.back_to_batch_btn.setStyleSheet(
-            "QPushButton#backToBatchBtn { background-color: #5856D6; color: white; border: none; "
-            "border-radius: 8px; padding: 8px 16px; font-weight: 500; font-size: 13px; }"
-            "QPushButton#backToBatchBtn:hover { background-color: #403E99; }"
-        )
-        self.back_to_batch_btn.clicked.connect(self._on_back_to_batch)
-        content_layout.addWidget(self.back_to_batch_btn, alignment=Qt.AlignCenter)
+        tb_layout.addStretch()
 
-        # 全剧总结按钮（有批量数据时显示）
+        # 全剧总结按钮
         self.summary_btn = QPushButton("📊 生成全剧总结")
-        self.summary_btn.setObjectName("analyzeBtn")
-        self.summary_btn.setVisible(False)
-        self.summary_btn.setFixedHeight(36)
-        content_layout.addWidget(self.summary_btn, alignment=Qt.AlignCenter)
+        self.summary_btn.setFixedHeight(32)
+        self.summary_btn.setStyleSheet(
+            "QPushButton { background-color: #5856D6; color: white; border: none; "
+            "border-radius: 6px; padding: 6px 16px; font-weight: 600; font-size: 12px; }"
+            "QPushButton:hover { background-color: #403E99; }"
+            "QPushButton:disabled { background-color: #C7C7CC; color: #E5E5EA; }"
+        )
+        tb_layout.addWidget(self.summary_btn)
+
+        # 查看已缓存总结按钮
+        self.view_summary_btn = QPushButton("📊 查看全剧总结")
+        self.view_summary_btn.setVisible(False)
+        self.view_summary_btn.setFixedHeight(32)
+        self.view_summary_btn.setStyleSheet(
+            "QPushButton { background-color: #34C759; color: white; border: none; "
+            "border-radius: 6px; padding: 6px 16px; font-weight: 600; font-size: 12px; }"
+            "QPushButton:hover { background-color: #2DB84E; }"
+        )
+        self.view_summary_btn.clicked.connect(self._on_view_cached_summary)
+        tb_layout.addWidget(self.view_summary_btn)
+
+        content_layout.addWidget(self.batch_toolbar)
 
         # 进度
         progress_frame = QFrame()
@@ -650,7 +666,6 @@ class MainWindow(QMainWindow):
         self.drop_zone.file_dropped.connect(self._on_file_dropped)
         self.browse_btn.clicked.connect(self._on_browse)
         self.analyze_btn.clicked.connect(self._on_analyze)
-        self.batch_analyze_btn.clicked.connect(self._on_batch_analyze)
         self.summary_btn.clicked.connect(self._on_generate_summary)
         self.settings_btn.clicked.connect(self._on_settings)
         self.export_md_btn.clicked.connect(self._on_export_md)
@@ -698,17 +713,14 @@ class MainWindow(QMainWindow):
             if self.view_mode != "batch":
                 self.batch_results.append(self.result)
 
-            # 显示批量分析按钮（允许用户继续分析更多视频）
-            self.batch_analyze_btn.setVisible(True)
-            self.batch_analyze_btn.setEnabled(True)
-            self.batch_analyze_btn.setText("▶ 批量分析所有片段")
+            # 显示批量分析工具栏
+            self.batch_toolbar.setVisible(True)
+            self._populate_episode_selector()
+            self.episode_combo.setCurrentIndex(len(self.batch_results) - 1)
 
-            # 如果有多个批量结果，显示集数选择器和总结按钮
-            if len(self.batch_results) > 1:
-                self.episode_selector_frame.setVisible(True)
-                self._populate_episode_selector()
-                self.summary_btn.setVisible(True)
-                self.summary_btn.setEnabled(True)
+            # 如果有已缓存的总结，显示查看按钮
+            if self.cached_summary_md:
+                self.view_summary_btn.setVisible(True)
 
             self._display_results()
             self.export_md_btn.setEnabled(True)
@@ -721,9 +733,6 @@ class MainWindow(QMainWindow):
             err = self.result.error if self.result else "未知错误"
             self.step_label.setText(f"❌ {err}")
             self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
-            # 即使失败也恢复按钮状态
-            self.batch_analyze_btn.setEnabled(True)
-            self.batch_analyze_btn.setText("▶ 批量分析所有片段")
 
     def _on_expand_toggle(self):
         """切换结果区域展开/收起"""
@@ -1669,16 +1678,11 @@ class MainWindow(QMainWindow):
                     self.result = r
                     break
 
-            if len(self.batch_results) > 1:
-                self.episode_selector_frame.setVisible(True)
-                self._populate_episode_selector()
-                self.summary_btn.setVisible(True)
-                self.summary_btn.setEnabled(True)
-
-            # 显示批量分析按钮
-            self.batch_analyze_btn.setVisible(True)
-            self.batch_analyze_btn.setEnabled(True)
-            self.batch_analyze_btn.setText("▶ 批量分析所有片段")
+            # 显示批量分析工具栏
+            self.batch_toolbar.setVisible(True)
+            self._populate_episode_selector()
+            if len(self.batch_results) > 0:
+                self.episode_combo.setCurrentIndex(0)
 
             self.export_md_btn.setEnabled(True)
             self.export_docx_btn.setEnabled(True)
@@ -1688,73 +1692,12 @@ class MainWindow(QMainWindow):
 
     # ─── 批量分析与多集管理 ───
 
-    def _on_batch_analyze(self):
-        """批量分析：重新对所有视频文件逐集分析"""
-        if self.is_analyzing or not self.video_path:
-            return
-        self.is_analyzing = True
-        self.batch_analyze_btn.setEnabled(False)
-        self.batch_analyze_btn.setText("⏳ 批量分析中...")
-        self.progress_frame.setVisible(True)
-        self.progress_bar.setValue(0)
-        self.step_label.setText("正在批量分析...")
-        self.step_label.setStyleSheet("color: #007AFF; font-size: 12px;")
-
-        # 清空之前的批量结果
-        self.batch_results = []
-        self.view_mode = "batch"
-
-        start_pct = 65 if self.video_source == "url" else 0
-        self.progress_bar.setValue(start_pct)
-
-        def progress_cb(msg):
-            pct = self.progress_bar.value()
-            step_progress = {
-                "获取视频信息": 5, "提取音频": 15, "Whisper": 25,
-                "语音转写": 40, "场景检测": 55, "AI 剧本分析": 60,
-                "角色标注": 65, "钩子分析完成": 72, "结构化剧本完成": 80,
-                "人物图谱完成": 88, "改写建议完成": 95,
-                "分析完成": 98,
-            }
-            for key, val in step_progress.items():
-                if key in msg:
-                    pct = start_pct + int(val * (100 - start_pct) / 100)
-                    break
-            pct = min(pct, 98)
-            self._progress_signal.emit(pct, msg)
-
-        def worker():
-            pipeline = VideoToScriptPipeline(
-                whisper_model=self.settings.get("whisper_model", "base"),
-                scene_threshold=self.settings.get("scene_threshold", 35.0),
-                min_scene_duration=self.settings.get("min_scene_duration", 2.0),
-                openai_api_key=self.settings.get("openai_api_key", ""),
-                openai_model=self.settings.get("openai_model", "gpt-4o-mini"),
-                openai_base_url=self.settings.get("openai_base_url", ""),
-                language=self.settings.get("language", "") or None,
-            )
-            result = pipeline.run(
-                self.video_path,
-                progress_cb=progress_cb,
-                source=self.video_source,
-                platform=getattr(self, '_download_platform', ''),
-                video_title=getattr(self, '_download_title', ''),
-            )
-            self.result = result
-            # 追加到批量结果（不清空已有的）
-            if result and not result.error:
-                self.batch_results.append(result)
-            self._analyze_done_signal.emit()
-
-        threading.Thread(target=worker, daemon=True).start()
-
     def _on_back_to_batch(self):
         """返回批量结果视图"""
         if not self.batch_results:
             return
         self.view_mode = "batch"
         self.back_to_batch_btn.setVisible(False)
-        self.episode_selector_frame.setVisible(True)
         self._display_batch_results()
 
     def _on_episode_changed(self, index):
@@ -1765,8 +1708,8 @@ class MainWindow(QMainWindow):
         self.view_mode = "single"
         self.result = self.batch_results[index]
         self._display_results()
-        self.back_to_batch_btn.setVisible(True)
-        self.episode_selector_frame.setVisible(False)
+        # 单集视图时显示返回按钮
+        self.back_to_batch_btn.setVisible(len(self.batch_results) > 1)
 
     def _populate_episode_selector(self):
         """填充集数选择器"""
@@ -1835,10 +1778,15 @@ class MainWindow(QMainWindow):
     # ─── 全剧总结 ───
 
     def _on_generate_summary(self):
-        """生成全剧总结"""
+        """生成全剧总结（如果已有缓存则直接显示）"""
         if not self.batch_results or not self.settings.get("openai_api_key"):
             self.step_label.setText("❌ 需要批量分析结果和 API Key 才能生成全剧总结")
             self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            return
+
+        # 如果已有缓存，直接显示（不需要重新调用 LLM）
+        if self.cached_summary_md:
+            self._on_view_cached_summary()
             return
 
         self.summary_btn.setEnabled(False)
@@ -1984,8 +1932,14 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _show_summary_result(self, summary_md: str):
         """显示全剧总结结果"""
+        # 缓存总结到界面（不丢失）
+        self.cached_summary_md = summary_md
+
         self.summary_btn.setEnabled(True)
-        self.summary_btn.setText("📊 生成全剧总结")
+        self.summary_btn.setText("📊 重新生成总结")
+        # 显示查看缓存总结按钮
+        self.view_summary_btn.setVisible(True)
+
         self.tab_widget.setVisible(True)
         self._set_results_expanded(True)
 
@@ -2004,6 +1958,25 @@ class MainWindow(QMainWindow):
 
         self.step_label.setText("✅ 全剧总结生成完成")
         self.step_label.setStyleSheet("color: #34C759; font-size: 12px;")
+
+    def _on_view_cached_summary(self):
+        """查看已缓存的全剧总结"""
+        if not self.cached_summary_md:
+            return
+        self.view_mode = "summary"
+        self.tab_widget.setVisible(True)
+        self._set_results_expanded(True)
+
+        summary_html = self._md_to_enriched_html(self.cached_summary_md, "📊 全剧总结", "#5856D6", "#EDEDFC")
+        self.transcript_tab.setHtml(summary_html)
+
+        placeholder = '<p style="color:#86868B;font-size:14px;text-align:center;margin-top:40px">📊 当前为全剧总结视图，选择具体集数可查看详细分析</p>'
+        self.scenes_tab.setHtml(placeholder)
+        self.hooks_tab.setHtml(placeholder)
+        self.script_tab.setHtml(placeholder)
+        self.characters_tab.setHtml(placeholder)
+        self.rewrite_tab.setHtml(placeholder)
+        self.na_tab.setHtml(placeholder)
 
     @Slot(str)
     def _show_summary_error(self, error: str):

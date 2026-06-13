@@ -94,6 +94,15 @@ def download_video(
         "restrictfilenames": False,
         # 自动修复扩展名
         "fixup": "detect_or_warn",
+        # 重试机制：网络不稳定时自动重试
+        "retries": 10,
+        "fragment_retries": 10,
+        "file_access_retries": 3,
+        "extractor_retries": 3,
+        # 断点续传：支持从断开处继续下载
+        "continue_dl": True,
+        # 超时设置
+        "socket_timeout": 30,
     }
 
     # Cookie 文件（用于需要登录的平台）
@@ -167,6 +176,9 @@ def download_video(
             error_msg = f"{platform}访问被拒绝，可能需要配置 Cookie"
         elif "Unsupported URL" in error_msg:
             error_msg = f"不支持该链接格式，请检查链接是否正确"
+        elif "Downloaded" in error_msg and "expected" in error_msg:
+            # 文件大小不匹配（网络中断导致），提示重试
+            error_msg = f"⚠️ 下载不完整（网络中断），已自动开启断点续传。请重新点击「开始分析」即可继续下载。"
 
         if progress_cb:
             progress_cb(f"❌ 下载失败: {error_msg}")
@@ -232,6 +244,183 @@ def get_video_info_only(url: str) -> DownloadResult:
             )
     except Exception as e:
         return DownloadResult(success=False, error=str(e), platform=platform)
+
+
+def get_playlist_info(url: str) -> dict:
+    """
+    检测链接是否为剧集/播放列表，返回分集列表信息。
+
+    Args:
+        url: 视频或剧集链接
+
+    Returns:
+        dict:
+            is_series: bool — 是否为多集系列
+            total_episodes: int — 总集数
+            series_title: str — 剧集名称
+            episodes: list[dict] — 分集信息列表，每项含 {index, title, url, duration}
+            error: str — 错误信息（如有）
+    """
+    url = url.strip()
+    if not url or not url.startswith("http"):
+        return {"is_series": False, "total_episodes": 0, "series_title": "",
+                "episodes": [], "error": "无效的链接"}
+
+    # 先识别平台（用于后续推断系列URL）
+    platform = detect_platform(url)
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "extract_flat": "in",  # 获取播放列表但不下载每个视频的详细信息（更快）
+        "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info is None:
+                return {"is_series": False, "total_episodes": 0, "series_title": "",
+                        "episodes": [], "error": "无法获取视频信息", "uploader": ""}
+
+            # 检查是否为播放列表/剧集
+            entries = info.get("entries") or []
+            series_title = info.get("title", "") or ""
+
+            # 单个视频（不是剧集）
+            if not entries:
+                duration = info.get("duration", 0) or 0
+                current_id = info.get("id", "")
+                webpage_url = info.get("webpage_url") or info.get("original_url") or url
+
+                # 尝试从单个视频信息中提取系列ID（抖音/B站等平台）
+                series_id = (
+                    info.get("series") or info.get("series_id") or
+                    info.get("mix_id") or info.get("album_id") or ""
+                )
+
+                # 如果拿到 series_id，尝试构造系列页面URL并重试
+                if series_id and not url.startswith("file"):
+                    deduced_series_url = _try_deduce_series_url(info, webpage_url, platform)
+                    if deduced_series_url:
+                        try:
+                            opts2 = dict(ydl_opts)
+                            opts2["extract_flat"] = True  # 只拿列表
+                            with yt_dlp.YoutubeDL(opts2) as ydl2:
+                                info2 = ydl2.extract_info(deduced_series_url, download=False)
+                                if info2 and info2.get("entries"):
+                                    entries = info2.get("entries") or []
+                                    series_title = info2.get("title", "") or info.get("title", "")
+                                    # 找到包含当前视频的那一集，排到前面
+                                    for i, entry in enumerate(entries):
+                                        if entry.get("id") == current_id:
+                                            entries = [entry] + [e for j, e in enumerate(entries) if j != i]
+                                            break
+                        except Exception:
+                            pass
+
+                # Fallback：如果还没拿到列表，尝试用上传者ID拼用户主页链接再试一次
+                if not entries and platform == "抖音":
+                    uploader_id = info.get("uploader_id") or ""
+                    if uploader_id:
+                        # 抖音：尝试用 video_url 替换为用户主页相关路径
+                        fallback_urls = [
+                            f"https://www.douyin.com/user/{uploader_id}",
+                            # 某些抖音合集页面格式
+                            f"https://www.douyin.com/mix/{series_id}" if series_id else "",
+                        ]
+                        for fu in fallback_urls:
+                            if not fu:
+                                continue
+                            try:
+                                opts3 = dict(ydl_opts)
+                                opts3["extract_flat"] = True
+                                with yt_dlp.YoutubeDL(opts3) as ydl3:
+                                    info3 = ydl3.extract_info(fu, download=False)
+                                    if info3 and info3.get("entries"):
+                                        entries = info3.get("entries") or []
+                                        series_title = info3.get("title", "") or info.get("title", "")
+                                        break
+                            except Exception:
+                                pass
+
+                if not entries:
+                    uploader_name = (
+                        info.get("uploader") or info.get("channel") or
+                        info.get("artist") or ""
+                    )
+                    return {
+                        "is_series": False, "total_episodes": 1,
+                        "series_title": "", "episodes": [{
+                            "index": 1, "title": info.get("title", ""),
+                            "url": url, "duration": duration,
+                        }], "error": "",
+                        "uploader": uploader_name,
+                    }
+
+            # 多集：构建分集列表
+            episodes = []
+            for i, entry in enumerate(entries):
+                ep_url = entry.get("url") or entry.get("webpage_url") or ""
+                if not ep_url and entry.get("id"):
+                    # 尝试用通用方式构造分集URL
+                    ep_url = _try_build_episode_url(url, entry.get("id", ""), platform)
+                ep_info = {
+                    "index": i + 1,
+                    "title": entry.get("title", f"第{i+1}集"),
+                    "url": ep_url,
+                    "duration": entry.get("duration") or 0,
+                }
+                episodes.append(ep_info)
+
+            return {
+                "is_series": True,
+                "total_episodes": len(episodes),
+                "series_title": series_title,
+                "episodes": episodes,
+                "error": "",
+                "uploader": info.get("uploader") or info.get("channel") or "",
+            }
+
+    except Exception as e:
+        err_msg = str(e)
+        return {
+            "is_series": False, "total_episodes": 1,
+            "series_title": "", "episodes": [{
+                "index": 1, "title": "", "url": url, "duration": 0,
+            }], "error": f"检测失败({err_msg})，将按单集处理",
+            "uploader": "",
+        }
+
+
+def _try_deduce_series_url(info: dict, url: str, platform: str) -> str:
+    """尝试从单个视频信息中推断系列页面URL"""
+    # 抖音：从视频页面提取用户主页，再拼出系列页
+    if platform == "抖音":
+        user_id = (
+            info.get("uploader_id") or info.get("creator_id") or ""
+        )
+        if user_id:
+            # 抖音用户主页（系列通常在用户主页的「作品」或「合集」tab）
+            return f"https://www.douyin.com/user/{user_id}"
+    # YouTube：从 video info 里取 playlist_id
+    if platform == "YouTube":
+        playlist_id = info.get("playlist_id") or ""
+        if playlist_id:
+            return f"https://www.youtube.com/playlist?list={playlist_id}"
+    return ""
+
+
+def _try_build_episode_url(base_url: str, video_id: str, platform: str) -> str:
+    """尝试根据平台和video_id构造分集直链"""
+    if platform == "抖音" and video_id:
+        return f"https://www.douyin.com/video/{video_id}"
+    if platform == "YouTube" and video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    if platform == "B站" and video_id:
+        return f"https://www.bilibili.com/video/{video_id}"
+    return base_url  # 降级用原链接
 
 
 # 支持的平台列表（用于 UI 展示）

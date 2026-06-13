@@ -1,6 +1,7 @@
 """主窗口 — 浅色简洁风，支持本地文件和视频链接"""
 
 import os
+import json
 import threading
 import base64
 from io import BytesIO
@@ -330,6 +331,9 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.settings = load_settings()
         self.result = None
+        self.batch_results = []          # 批量分析结果列表（持久化，不清空）
+        self.current_episode_idx = 0     # 当前查看的集数索引
+        self.view_mode = "single"        # "single" | "batch" | "summary"
         self.is_analyzing = False
         self.is_downloading = False
         self.video_path = ""
@@ -437,6 +441,56 @@ class MainWindow(QMainWindow):
         self.analyze_btn.setFixedHeight(42)
         content_layout.addWidget(self.analyze_btn, alignment=Qt.AlignCenter)
 
+        # 批量分析按钮（单集分析完成后显示）
+        self.batch_analyze_btn = QPushButton("▶ 批量分析所有片段")
+        self.batch_analyze_btn.setObjectName("analyzeBtn")
+        self.batch_analyze_btn.setVisible(False)
+        self.batch_analyze_btn.setEnabled(False)
+        self.batch_analyze_btn.setFixedHeight(42)
+        content_layout.addWidget(self.batch_analyze_btn, alignment=Qt.AlignCenter)
+
+        # 集数选择器（批量分析完成后显示）
+        self.episode_selector_frame = QFrame()
+        self.episode_selector_frame.setVisible(False)
+        self.episode_selector_frame.setStyleSheet(
+            "QFrame { background-color: #F5F5F7; border-radius: 8px; padding: 8px 12px; }"
+        )
+        es_layout = QHBoxLayout(self.episode_selector_frame)
+        es_layout.setContentsMargins(8, 4, 8, 4)
+        es_label = QLabel("查看集数:")
+        es_label.setStyleSheet("font-size: 13px; color: #1D1D1F; font-weight: 500;")
+        es_layout.addWidget(es_label)
+        from PySide6.QtWidgets import QComboBox
+        self.episode_combo = QComboBox()
+        self.episode_combo.setStyleSheet(
+            "QComboBox { border: 1px solid #E5E5EA; border-radius: 6px; "
+            "padding: 4px 8px; font-size: 13px; background-color: #FFFFFF; }"
+            "QComboBox:hover { border-color: #007AFF; }"
+        )
+        self.episode_combo.currentIndexChanged.connect(self._on_episode_changed)
+        es_layout.addWidget(self.episode_combo)
+        es_layout.addStretch()
+        content_layout.addWidget(self.episode_selector_frame)
+
+        # 返回批量结果按钮（单集查看时显示）
+        self.back_to_batch_btn = QPushButton("📦 返回批量结果")
+        self.back_to_batch_btn.setObjectName("backToBatchBtn")
+        self.back_to_batch_btn.setVisible(False)
+        self.back_to_batch_btn.setStyleSheet(
+            "QPushButton#backToBatchBtn { background-color: #5856D6; color: white; border: none; "
+            "border-radius: 8px; padding: 8px 16px; font-weight: 500; font-size: 13px; }"
+            "QPushButton#backToBatchBtn:hover { background-color: #403E99; }"
+        )
+        self.back_to_batch_btn.clicked.connect(self._on_back_to_batch)
+        content_layout.addWidget(self.back_to_batch_btn, alignment=Qt.AlignCenter)
+
+        # 全剧总结按钮（有批量数据时显示）
+        self.summary_btn = QPushButton("📊 生成全剧总结")
+        self.summary_btn.setObjectName("analyzeBtn")
+        self.summary_btn.setVisible(False)
+        self.summary_btn.setFixedHeight(36)
+        content_layout.addWidget(self.summary_btn, alignment=Qt.AlignCenter)
+
         # 进度
         progress_frame = QFrame()
         pf_layout = QHBoxLayout(progress_frame)
@@ -494,10 +548,24 @@ class MainWindow(QMainWindow):
         self.characters_tab.setToolTip("双击可放大查看")
         self.tab_widget.addTab(self.characters_tab, "人物图谱")
 
+        # 改写建议 Tab（基于 Excel 爆款短剧分析框架）
+        self.rewrite_tab = QTextEdit()
+        self.rewrite_tab.setReadOnly(True)
+        self.rewrite_tab.setToolTip("双击可放大查看")
+        self.tab_widget.addTab(self.rewrite_tab, "✍ 改写建议")
+
+        # 北美改编 Tab（基于 Excel 爆款短剧分析框架 — 5大板块分析）
+        self.na_tab = QTextEdit()
+        self.na_tab.setReadOnly(True)
+        self.na_tab.setToolTip("双击可放大查看")
+        self.tab_widget.addTab(self.na_tab, "🌎 北美改编")
+
         # 双击放大
         self.hooks_tab.mouseDoubleClickEvent = lambda e: self._expand_tab("钩子分析", self.hooks_tab.toMarkdown())
         self.script_tab.mouseDoubleClickEvent = lambda e: self._expand_tab("结构化剧本", self.script_tab.toMarkdown())
         self.characters_tab.mouseDoubleClickEvent = lambda e: self._expand_tab("人物图谱", self.characters_tab.toMarkdown())
+        self.rewrite_tab.mouseDoubleClickEvent = lambda e: self._expand_tab("改写建议", self.rewrite_tab.toMarkdown())
+        self.na_tab.mouseDoubleClickEvent = lambda e: self._expand_tab("北美改编", self.na_tab.toMarkdown())
         content_layout.addWidget(self.tab_widget, 1)
 
         # 底部
@@ -520,6 +588,8 @@ class MainWindow(QMainWindow):
         self.drop_zone.file_dropped.connect(self._on_file_dropped)
         self.browse_btn.clicked.connect(self._on_browse)
         self.analyze_btn.clicked.connect(self._on_analyze)
+        self.batch_analyze_btn.clicked.connect(self._on_batch_analyze)
+        self.summary_btn.clicked.connect(self._on_generate_summary)
         self.settings_btn.clicked.connect(self._on_settings)
         self.export_md_btn.clicked.connect(self._on_export_md)
         self.export_docx_btn.clicked.connect(self._on_export_docx)
@@ -553,10 +623,28 @@ class MainWindow(QMainWindow):
         self.is_analyzing = False
         self.analyze_btn.setEnabled(True)
         self.analyze_btn.setText("▶ 开始分析")
+
         if self.result and not self.result.error:
             self.progress_bar.setValue(100)
             self.step_label.setText("✅ 分析完成")
             self.step_label.setStyleSheet("color: #34C759; font-size: 12px;")
+
+            # 追加到批量结果（单集分析时也追加）
+            if self.view_mode != "batch":
+                self.batch_results.append(self.result)
+
+            # 显示批量分析按钮（允许用户继续分析更多视频）
+            self.batch_analyze_btn.setVisible(True)
+            self.batch_analyze_btn.setEnabled(True)
+            self.batch_analyze_btn.setText("▶ 批量分析所有片段")
+
+            # 如果有多个批量结果，显示集数选择器和总结按钮
+            if len(self.batch_results) > 1:
+                self.episode_selector_frame.setVisible(True)
+                self._populate_episode_selector()
+                self.summary_btn.setVisible(True)
+                self.summary_btn.setEnabled(True)
+
             self._display_results()
             self.export_md_btn.setEnabled(True)
             self.export_docx_btn.setEnabled(True)
@@ -568,6 +656,9 @@ class MainWindow(QMainWindow):
             err = self.result.error if self.result else "未知错误"
             self.step_label.setText(f"❌ {err}")
             self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            # 即使失败也恢复按钮状态
+            self.batch_analyze_btn.setEnabled(True)
+            self.batch_analyze_btn.setText("▶ 批量分析所有片段")
 
     def _on_expand_toggle(self):
         """切换结果区域展开/收起"""
@@ -989,6 +1080,22 @@ class MainWindow(QMainWindow):
         else:
             self.characters_tab.setMarkdown(chars_md)
 
+        # ── 改写建议 Tab ──
+        rewrite_md = self.result.rewrite_suggestions or ""
+        if rewrite_md and not rewrite_md.startswith("❌") and not rewrite_md.startswith("⚠️"):
+            rewrite_html = self._md_to_enriched_html(rewrite_md, "✍ 改写建议", "#5856D6", "#EDEDFC")
+            self.rewrite_tab.setHtml(rewrite_html)
+        else:
+            self.rewrite_tab.setMarkdown(rewrite_md or "暂无改写建议（需要配置 OpenAI API Key）")
+
+        # ── 北美改编 Tab（基于爆款短剧分析框架）──
+        na_md = self.result.north_america or ""
+        if na_md and not na_md.startswith("❌") and not na_md.startswith("⚠️"):
+            na_html = self._md_to_enriched_html(na_md, "🌎 北美改编可行性分析", "#AF52DE", "#F5E8FF")
+            self.na_tab.setHtml(na_html)
+        else:
+            self.na_tab.setMarkdown(na_md or "暂无北美改编分析（需要配置 OpenAI API Key）")
+
     def _speaker_color(self, speaker):
         """为角色分配固定颜色"""
         colors = ["#007AFF", "#FF3B30", "#34C759", "#FF9500", "#AF52DE", "#5856D6", "#FF2D55", "#5AC8FA"]
@@ -1280,6 +1387,11 @@ class MainWindow(QMainWindow):
             doc.add_heading("改写建议", level=1)
             self._add_markdown_to_doc(doc, result.rewrite_suggestions)
 
+        # ─── 北美改编分析 ───
+        if result.north_america and not result.north_america.startswith("❌"):
+            doc.add_heading("北美改编可行性分析", level=1)
+            self._add_markdown_to_doc(doc, result.north_america)
+
         try:
             doc.save(path)
             self.step_label.setText(f"✅ 已导出 Word 到桌面: {os.path.basename(path)}")
@@ -1316,6 +1428,282 @@ class MainWindow(QMainWindow):
                     run = p.add_run(part)
                     if i % 2 == 1:  # 奇数部分是粗体内容
                         run.bold = True
+
+    # ─── 批量分析与多集管理 ───
+
+    def _on_batch_analyze(self):
+        """批量分析：重新对所有视频文件逐集分析"""
+        if self.is_analyzing or not self.video_path:
+            return
+        self.is_analyzing = True
+        self.batch_analyze_btn.setEnabled(False)
+        self.batch_analyze_btn.setText("⏳ 批量分析中...")
+        self.progress_frame.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.step_label.setText("正在批量分析...")
+        self.step_label.setStyleSheet("color: #007AFF; font-size: 12px;")
+
+        # 清空之前的批量结果
+        self.batch_results = []
+        self.view_mode = "batch"
+
+        start_pct = 65 if self.video_source == "url" else 0
+        self.progress_bar.setValue(start_pct)
+
+        def progress_cb(msg):
+            pct = self.progress_bar.value()
+            step_progress = {
+                "获取视频信息": 5, "提取音频": 15, "Whisper": 25,
+                "语音转写": 40, "场景检测": 55, "AI 剧本分析": 60,
+                "角色标注": 65, "钩子分析完成": 72, "结构化剧本完成": 80,
+                "人物图谱完成": 88, "改写建议完成": 95,
+                "分析完成": 98,
+            }
+            for key, val in step_progress.items():
+                if key in msg:
+                    pct = start_pct + int(val * (100 - start_pct) / 100)
+                    break
+            pct = min(pct, 98)
+            self._progress_signal.emit(pct, msg)
+
+        def worker():
+            pipeline = VideoToScriptPipeline(
+                whisper_model=self.settings.get("whisper_model", "base"),
+                scene_threshold=self.settings.get("scene_threshold", 35.0),
+                min_scene_duration=self.settings.get("min_scene_duration", 2.0),
+                openai_api_key=self.settings.get("openai_api_key", ""),
+                openai_model=self.settings.get("openai_model", "gpt-4o-mini"),
+                openai_base_url=self.settings.get("openai_base_url", ""),
+                language=self.settings.get("language", "") or None,
+            )
+            result = pipeline.run(
+                self.video_path,
+                progress_cb=progress_cb,
+                source=self.video_source,
+                platform=getattr(self, '_download_platform', ''),
+                video_title=getattr(self, '_download_title', ''),
+            )
+            self.result = result
+            # 追加到批量结果（不清空已有的）
+            if result and not result.error:
+                self.batch_results.append(result)
+            self._analyze_done_signal.emit()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_back_to_batch(self):
+        """返回批量结果视图"""
+        if not self.batch_results:
+            return
+        self.view_mode = "batch"
+        self.back_to_batch_btn.setVisible(False)
+        self.episode_selector_frame.setVisible(True)
+        self._display_batch_results()
+
+    def _on_episode_changed(self, index):
+        """集数选择器切换"""
+        if index < 0 or index >= len(self.batch_results):
+            return
+        self.current_episode_idx = index
+        self.view_mode = "single"
+        self.result = self.batch_results[index]
+        self._display_results()
+        self.back_to_batch_btn.setVisible(True)
+        self.episode_selector_frame.setVisible(False)
+
+    def _populate_episode_selector(self):
+        """填充集数选择器"""
+        self.episode_combo.blockSignals(True)
+        self.episode_combo.clear()
+        for i, r in enumerate(self.batch_results):
+            vi = r.video_info
+            title = vi.title if vi and vi.title else os.path.basename(vi.path) if vi else f"第{i+1}集"
+            if len(title) > 30:
+                title = title[:30] + "..."
+            self.episode_combo.addItem(f"第{i+1}集: {title}")
+        self.episode_combo.blockSignals(False)
+
+    def _display_batch_results(self):
+        """显示批量分析结果汇总"""
+        if not self.batch_results:
+            return
+        self.tab_widget.setVisible(True)
+        self.expand_btn.setVisible(True)
+        self._set_results_expanded(True)
+
+        # 在转写文本 Tab 中显示批量汇总
+        html = ""
+        html += f'<div style="background:linear-gradient(135deg,#E8F0FE,#C4D9FD);border-radius:10px;padding:14px 16px;margin:0 0 16px 0;border:1px solid #B0CAFF">'
+        html += f'<p style="font-size:16px;font-weight:700;color:#0055CC;margin:0">📦 批量分析结果</p>'
+        html += f'<p style="font-size:13px;color:#007AFF;margin:4px 0 0 0">共分析 <b>{len(self.batch_results)}</b> 个视频</p>'
+        html += f'</div>'
+
+        # 汇总表格
+        html += f'<div style="margin:0 0 12px 0;border-radius:10px;overflow:hidden;border:1px solid #E5E5EA;box-shadow:0 1px 4px rgba(0,0,0,0.04)">'
+        html += f'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+        html += f'<tr style="background:#F5F5F7">'
+        html += f'<th style="padding:8px 12px;text-align:left;font-weight:600;color:#1D1D1F;border-bottom:2px solid #E5E5EA">集数</th>'
+        html += f'<th style="padding:8px 12px;text-align:left;font-weight:600;color:#1D1D1F;border-bottom:2px solid #E5E5EA">时长</th>'
+        html += f'<th style="padding:8px 12px;text-align:left;font-weight:600;color:#1D1D1F;border-bottom:2px solid #E5E5EA">对白段</th>'
+        html += f'<th style="padding:8px 12px;text-align:left;font-weight:600;color:#1D1D1F;border-bottom:2px solid #E5E5EA">场景数</th>'
+        html += f'<th style="padding:8px 12px;text-align:left;font-weight:600;color:#1D1D1F;border-bottom:2px solid #E5E5EA">状态</th>'
+        html += f'</tr>'
+        for i, r in enumerate(self.batch_results):
+            vi = r.video_info
+            row_bg = "background:#FFFFFF" if i % 2 == 0 else "background:#FAFAFA"
+            dur = f"{vi.duration:.0f}s" if vi else "-"
+            segs = len(r.enriched_segments) if r.enriched_segments else len(r.transcript_segments)
+            scenes = len(r.scenes)
+            status = "✅" if not r.error else "❌"
+            html += f'<tr style="{row_bg}">'
+            html += f'<td style="padding:7px 12px;border-bottom:1px solid #F0F0F0;font-weight:500">第{i+1}集</td>'
+            html += f'<td style="padding:7px 12px;border-bottom:1px solid #F0F0F0;color:#86868B">{dur}</td>'
+            html += f'<td style="padding:7px 12px;border-bottom:1px solid #F0F0F0">{segs}</td>'
+            html += f'<td style="padding:7px 12px;border-bottom:1px solid #F0F0F0">{scenes}</td>'
+            html += f'<td style="padding:7px 12px;border-bottom:1px solid #F0F0F0">{status}</td>'
+            html += f'</tr>'
+        html += f'</table></div>'
+        html += f'<p style="color:#86868B;font-size:12px;margin:8px 0">💡 点击上方「查看集数」下拉框切换到具体集数查看详细分析</p>'
+        self.transcript_tab.setHtml(html)
+
+        # 其他 Tab 显示提示
+        placeholder = '<p style="color:#86868B;font-size:14px;text-align:center;margin-top:40px">请选择具体集数查看详细分析</p>'
+        self.scenes_tab.setHtml(placeholder)
+        self.hooks_tab.setHtml(placeholder)
+        self.script_tab.setHtml(placeholder)
+        self.characters_tab.setHtml(placeholder)
+        self.rewrite_tab.setHtml(placeholder)
+        self.na_tab.setHtml(placeholder)
+
+    # ─── 全剧总结 ───
+
+    def _on_generate_summary(self):
+        """生成全剧总结"""
+        if not self.batch_results or not self.settings.get("openai_api_key"):
+            self.step_label.setText("❌ 需要批量分析结果和 API Key 才能生成全剧总结")
+            self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            return
+
+        self.summary_btn.setEnabled(False)
+        self.summary_btn.setText("⏳ 生成总结中...")
+        self.view_mode = "summary"
+
+        def worker():
+            try:
+                from openai import OpenAI
+                kwargs = {"api_key": self.settings.get("openai_api_key", ""), "timeout": 120.0}
+                base_url = self.settings.get("openai_base_url", "")
+                if base_url:
+                    kwargs["base_url"] = base_url
+                client = OpenAI(**kwargs)
+
+                # 汇总所有集的关键信息
+                summaries = []
+                for i, r in enumerate(self.batch_results):
+                    if r.error:
+                        summaries.append(f"第{i+1}集: 分析失败({r.error})")
+                        continue
+                    vi = r.video_info
+                    dur = f"{vi.duration:.0f}s" if vi else "未知"
+                    hooks = r.hooks_analysis[:800] if r.hooks_analysis else "无"
+                    chars = r.character_map[:600] if r.character_map else "无"
+                    summaries.append(f"第{i+1}集(时长{dur}):\n钩子分析: {hooks}\n人物图谱: {chars}")
+
+                all_summaries = "\n\n---\n\n".join(summaries)
+
+                prompt = f"""你是专业的短剧全剧分析专家。以下是一部短剧各集的分析数据，请生成一份「全剧总结报告」。
+
+{all_summaries}
+
+---
+
+请按以下5个维度输出全剧总结：
+
+### 一、全剧爆款公式
+用一句话总结整部剧的爆款逻辑
+
+### 二、人物弧光总结
+- 主角成长轨迹
+- 反派结局
+- 核心人物关系变化
+
+### 三、钩子体系评估
+- 各集钩子类型分布
+- 最强钩子与最弱钩子
+- 付费墙位置建议（第3/6/10集结尾）
+
+### 四、情绪曲线总览
+- 全剧情绪起伏
+- 最强的3个情绪高潮点
+- 情绪断裂点（如有）
+
+### 五、改编建议
+- 最有改编价值的3集
+- 整体改写方向推荐
+- 北美市场适配要点
+
+用 Markdown 表格和结构化文字输出。"""
+
+                resp = client.chat.completions.create(
+                    model=self.settings.get("openai_model", "gpt-4o-mini"),
+                    messages=[
+                        {"role": "system", "content": "你是短剧全剧分析专家，擅长多集连贯性分析和改编策略。"},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7, max_tokens=4000
+                )
+                summary_md = resp.choices[0].message.content
+
+                # 缓存到本地
+                cache_dir = os.path.expanduser("~/.video_to_script_cache")
+                os.makedirs(cache_dir, exist_ok=True)
+                series_name = ""
+                if self.batch_results and self.batch_results[0].video_info:
+                    series_name = self.batch_results[0].video_info.title or os.path.basename(self.batch_results[0].video_info.path)
+                series_dir = os.path.join(cache_dir, series_name[:50].replace("/", "_"))
+                os.makedirs(series_dir, exist_ok=True)
+                with open(os.path.join(series_dir, "_summary.json"), "w", encoding="utf-8") as f:
+                    json.dump({"summary": summary_md}, f, ensure_ascii=False, indent=2)
+
+                # 在主线程更新 UI
+                QMetaObject.invokeMethod(self, "_show_summary_result", Qt.QueuedConnection, Q_ARG(str, summary_md))
+
+            except Exception as e:
+                QMetaObject.invokeMethod(self, "_show_summary_error", Qt.QueuedConnection, Q_ARG(str, str(e)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    @Slot(str)
+    def _show_summary_result(self, summary_md: str):
+        """显示全剧总结结果"""
+        self.summary_btn.setEnabled(True)
+        self.summary_btn.setText("📊 生成全剧总结")
+        self.tab_widget.setVisible(True)
+        self._set_results_expanded(True)
+
+        # 在转写文本 Tab 显示总结
+        summary_html = self._md_to_enriched_html(summary_md, "📊 全剧总结", "#5856D6", "#EDEDFC")
+        self.transcript_tab.setHtml(summary_html)
+
+        # 更新其他 Tab 显示提示
+        placeholder = '<p style="color:#86868B;font-size:14px;text-align:center;margin-top:40px">📊 当前为全剧总结视图，选择具体集数可查看详细分析</p>'
+        self.scenes_tab.setHtml(placeholder)
+        self.hooks_tab.setHtml(placeholder)
+        self.script_tab.setHtml(placeholder)
+        self.characters_tab.setHtml(placeholder)
+        self.rewrite_tab.setHtml(placeholder)
+        self.na_tab.setHtml(placeholder)
+
+        self.step_label.setText("✅ 全剧总结生成完成")
+        self.step_label.setStyleSheet("color: #34C759; font-size: 12px;")
+
+    @Slot(str)
+    def _show_summary_error(self, error: str):
+        """显示全剧总结错误"""
+        self.summary_btn.setEnabled(True)
+        self.summary_btn.setText("📊 生成全剧总结")
+        self.step_label.setText(f"❌ 全剧总结生成失败: {error}")
+        self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
 
     # 主窗口级拖拽兜底
     def _resolve_path(self, mime):

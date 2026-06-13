@@ -1,0 +1,60 @@
+﻿==========================================
+  Video to Script v2.1.7
+  Video to Script Tool - README (Windows)
+==========================================
+
+[Step 1] Install Python (if not already)
+----------------------------------------
+  Download from: https://www.python.org/downloads/
+  (Need Python 3.9 or higher)
+
+  IMPORTANT: Check "Add Python to PATH" during install!
+  This is the most common mistake for beginners.
+
+[Step 2] Launch the app
+----------------------------------------
+  Double-click "双击启动.bat"
+
+  If it flashes and closes:
+  -> Confirm Python is installed and in PATH
+  -> Open CMD and run: python --version
+  -> If "not found", reinstall Python with PATH checked
+
+[Step 3] Configure AI analysis (first time)
+----------------------------------------
+  After launch, click the settings icon (top-right) and enter:
+  - API Key: Your DeepSeek API Key
+  - API URL: https://api.deepseek.com/v1
+  - Model: deepseek-chat
+
+  Get API Key: https://platform.deepseek.com/
+
+[First Launch]
+  The first launch will create a virtual environment and install
+  dependencies (about 3-5 minutes).
+  Whisper voice model will also auto-download (about 150MB).
+  Subsequent launches take only a few seconds.
+
+[FAQ]
+
+  Q: Double-click .bat and it flashes?
+  A: Python is not installed or not in PATH.
+     Fix: Reinstall Python, check "Add Python to PATH"
+
+  Q: pip install fails?
+  A: Network issue. Try China mirror:
+     In CMD: pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+  Q: Install ffmpeg (optional but recommended)?
+  A: Download Windows build from https://ffmpeg.org/download.html
+     Add the bin folder to system PATH
+
+[Detailed Usage]
+  See "使用说明.md" (requires Unicode text viewer)
+
+[System Requirements]
+  - Windows 10 or higher
+  - Python 3.9+ (install with Add to PATH checked)
+  - About 2GB disk space (dependencies + models)
+
+==========================================

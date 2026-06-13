@@ -18,7 +18,7 @@ from ui.styles import APP_STYLESHEET
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Video to Script")
-    app.setApplicationVersion("2.1.7")
+    app.setApplicationVersion("2.1.9")
     # macOS 使用原生风格，Windows/Linux 使用 Fusion
     if sys.platform == "darwin":
         app.setStyle("macOS")

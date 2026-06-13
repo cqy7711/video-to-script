@@ -494,6 +494,10 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._connect_signals()
 
+        # ── 加载上次分析数据 ──
+        self._cache_path = os.path.join(os.path.expanduser('~'), '.video_to_script_cache.json')
+        self._load_cache()
+
     def _setup_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -1679,8 +1683,8 @@ class MainWindow(QMainWindow):
     def _build_docx_for_result(self, result, selected_tabs, doc=None, ep_label="", version='full'):
         """为单个结果构建Word文档内容（可传入现有doc用于合并）"""
         from docx import Document
-        from docx.shared import Inches, RGBColor
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, RGBColor, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 
         if doc is None:
             doc = Document()
@@ -1723,7 +1727,7 @@ class MainWindow(QMainWindow):
                 concise, full = self._split_concise_full(content)
                 display = concise if version == 'concise' else full
                 doc.add_heading(title, level=2)
-                self._add_markdown_to_doc(doc, display)
+                MainWindow._md_add_to_doc(doc, display)
 
         return doc
 
@@ -1776,7 +1780,7 @@ class MainWindow(QMainWindow):
                 self._build_docx_for_result(r, selected_tabs, doc, ep_label)
             if include_summary and self.cached_summary_md:
                 doc.add_heading("全局总结", level=1)
-                self._add_markdown_to_doc(doc, self.cached_summary_md)
+                MainWindow._md_add_to_doc(doc, self.cached_summary_md)
             path = os.path.join(desktop, "短剧拆解报告.docx")
             doc.save(path)
             exported.append(path)
@@ -1794,40 +1798,176 @@ class MainWindow(QMainWindow):
                 doc = Document()
                 title = doc.add_heading("短剧拆解报告 — 全局总结", level=0)
                 title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                self._add_markdown_to_doc(doc, self.cached_summary_md)
+                MainWindow._md_add_to_doc(doc, self.cached_summary_md)
                 path = os.path.join(desktop, "短剧拆解报告_全局总结.docx")
                 doc.save(path)
                 exported.append(path)
         return exported
 
     @staticmethod
-    def _add_markdown_to_doc(doc, md_text):
-        """简易 Markdown → Word 段落转换"""
-        for line in md_text.split("\n"):
-            stripped = line.strip()
+    def _md_add_to_doc(doc, md_text):
+        """
+        完整 Markdown → Word 转换，视觉效果与 QTextEdit(setMarkdown) 尽量一致。
+        支持：标题(1-4级)、粗体、斜体、无序列表、有序列表、
+              引用块、代码块、分隔线、内联格式。
+        """
+        from docx.shared import Pt, RGBColor
+        import re
+
+        lines = md_text.split("\n")
+        i = 0
+        while i < len(lines):
+            raw = lines[i]
+            stripped = raw.strip()
+
+            # ── 空行：跳过（Word 段落间距自行控制）──
             if not stripped:
-                doc.add_paragraph("")
+                i += 1
                 continue
-            if stripped.startswith("### "):
+
+            # ── 标题 ──
+            if stripped.startswith("#### "):
+                doc.add_heading(stripped[5:], level=4)
+                i += 1
+            elif stripped.startswith("### "):
                 doc.add_heading(stripped[4:], level=3)
+                i += 1
             elif stripped.startswith("## "):
                 doc.add_heading(stripped[3:], level=2)
+                i += 1
             elif stripped.startswith("# "):
                 doc.add_heading(stripped[2:], level=1)
-            elif stripped.startswith("- ") or stripped.startswith("* "):
-                doc.add_paragraph(stripped[2:], style="List Bullet")
-            elif len(stripped) > 2 and stripped[0].isdigit() and stripped[1] in ".、)":
-                doc.add_paragraph(stripped[2:].strip(), style="List Number")
-            else:
+                i += 1
+
+            # ── 分隔线 ──
+            elif stripped in ("---", "***", "___"):
                 p = doc.add_paragraph()
-                # 处理粗体 **text**
-                parts = stripped.split("**")
-                for i, part in enumerate(parts):
-                    if not part:
-                        continue
-                    run = p.add_run(part)
-                    if i % 2 == 1:  # 奇数部分是粗体内容
-                        run.bold = True
+                run = p.add_run("─" * 40)
+                run.font.color.rgb = RGBColor(0xCC, 0xCC, 0xCC)
+                i += 1
+
+            # ── 代码块 ──
+            elif stripped.startswith("```"):
+                code_lines = []
+                i += 1
+                while i < len(lines) and not lines[i].strip().startswith("```"):
+                    code_lines.append(lines[i])
+                    i += 1
+                if i < len(lines):
+                    i += 1  # 跳过结束的 ```
+                code_text = "\n".join(code_lines)
+                p = doc.add_paragraph(code_text)
+                p.paragraph_format.left_indent = Inches(0.3)
+                for run in p.runs:
+                    run.font.name = "Courier New"
+                    run.font.size = Pt(9)
+                    run.font.color.rgb = RGBColor(0xDD, 0xDD, 0xDD)
+                i  # 已更新
+
+            # ── 引用块 ──
+            elif stripped.startswith("> "):
+                quote_lines = []
+                while i < len(lines) and lines[i].strip().startswith("> "):
+                    quote_lines.append(lines[i].strip()[2:])
+                    i += 1
+                quote_text = " ".join(quote_lines)
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Inches(0.4)
+                p.paragraph_format.right_indent = Inches(0.4)
+                MainWindow._md_add_inline_runs(p, quote_text)
+                for run in p.runs:
+                    run.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+                    run.font.italic = True
+
+            # ── 无序列表 ──
+            elif stripped.startswith(("- ", "* ")):
+                items = []
+                while i < len(lines) and lines[i].strip().startswith(("- ", "* ")):
+                    items.append(lines[i].strip()[2:])
+                    i += 1
+                for item in items:
+                    p = doc.add_paragraph()
+                    MainWindow._md_add_inline_runs(p, item)
+                    p.style = "List Bullet"
+
+            # ── 有序列表 ──
+            elif len(stripped) > 2 and stripped[0].isdigit() and stripped[1] in ".、)":
+                items = []
+                while i < len(lines) and len(lines[i].strip()) > 2 and \
+                      lines[i].strip()[0].isdigit() and lines[i].strip()[1] in ".、)":
+                    items.append(lines[i].strip()[2:].strip())
+                    i += 1
+                for item in items:
+                    p = doc.add_paragraph()
+                    MainWindow._md_add_inline_runs(p, item)
+                    p.style = "List Number"
+
+            # ── 普通段落 ──
+            else:
+                # 收集连续普通文本行
+                para_parts = [stripped]
+                i += 1
+                while i < len(lines) and lines[i].strip() \
+                      and not lines[i].strip().startswith(("# ", "## ", "### ", "#### ")) \
+                      and not lines[i].strip().startswith(("- ", "* ", "> ", "```")) \
+                      and not (len(lines[i].strip()) > 2 and lines[i].strip()[0].isdigit() and lines[i].strip()[1] in ".、)") \
+                      and lines[i].strip() not in ("---", "***", "___"):
+                    para_parts.append(lines[i].strip())
+                    i += 1
+                para_text = " ".join(para_parts)
+                p = doc.add_paragraph()
+                MainWindow._md_add_inline_runs(p, para_text)
+
+    @staticmethod
+    def _md_add_inline_runs(paragraph, text):
+        """
+        解析行内 Markdown 格式（**粗体** *斜体**），向 paragraph 添加多个 run。
+        """
+        import re
+        # 先处理粗体+斜体（****），再处理粗体（**），最后处理斜体（*）
+        # 使用非贪婪匹配，优先匹配更长的标记
+        pattern = r"\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|_\*\*(.+?)\*\*_|\*(.+?)\*"
+        # 更可靠的作法：逐字符解析
+        i = 0
+        seg_start = 0
+        bold_flag = False
+        italic_flag = False
+        while i < len(text):
+            # 粗体+斜体 ****
+            if i + 3 < len(text) and text[i:i+4] == "****":
+                if seg_start < i:
+                    run = paragraph.add_run(text[seg_start:i])
+                    run.bold = bold_flag
+                    run.italic = italic_flag
+                bold_flag = not bold_flag
+                italic_flag = not italic_flag
+                i += 4
+                seg_start = i
+            # 粗体 **
+            elif i + 1 < len(text) and text[i:i+2] == "**":
+                if seg_start < i:
+                    run = paragraph.add_run(text[seg_start:i])
+                    run.bold = bold_flag
+                    run.italic = italic_flag
+                bold_flag = not bold_flag
+                i += 2
+                seg_start = i
+            # 斜体 *
+            elif text[i] == "*":
+                if seg_start < i:
+                    run = paragraph.add_run(text[seg_start:i])
+                    run.bold = bold_flag
+                    run.italic = italic_flag
+                italic_flag = not italic_flag
+                i += 1
+                seg_start = i
+            else:
+                i += 1
+        # 剩余文本
+        if seg_start < len(text):
+            run = paragraph.add_run(text[seg_start:])
+            run.bold = bold_flag
+            run.italic = italic_flag
 
     # ─── 多集链接批量下载分析 ───
 
@@ -2032,6 +2172,7 @@ class MainWindow(QMainWindow):
         success_count = sum(1 for r in self.batch_results if not r.error)
         fail_count = sum(1 for r in self.batch_results if r.error)
 
+        # ── 加载上次分析数据 ──
         self.progress_bar.setValue(100)
         if fail_count == 0:
             self.step_label.setText(f"✅ 批量分析完成！共 {success_count} 集全部成功")
@@ -2391,3 +2532,161 @@ class MainWindow(QMainWindow):
         path = self._resolve_path(event.mimeData())
         if path:
             self._set_video_file(path)
+
+
+    # ─── 数据持久化 ───
+    def _save_cache(self):
+        """关闭应用时保存分析数据到本地 JSON 文件"""
+        try:
+            cache = {
+                "version": 2,
+                "cached_summary_md": self.cached_summary_md,
+                "view_mode": self.view_mode,
+                "single_result": None,
+                "batch_results": [],
+            }
+            # 单集结果
+            if self.result and not self.result.error:
+                cache["single_result"] = self._result_to_dict(self.result)
+            # 多集结果
+            for r in self.batch_results:
+                if not r.error:
+                    cache["batch_results"].append(self._result_to_dict(r))
+            if cache["single_result"] or cache["batch_results"]:
+                with open(self._cache_path, "w", encoding="utf-8") as f:
+                    json.dump(cache, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _load_cache(self):
+        """启动时加载上次分析数据"""
+        try:
+            if not os.path.exists(self._cache_path):
+                return
+            with open(self._cache_path, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+            if cache.get("version") != 2:
+                return
+            # 恢复单集结果
+            sr = cache.get("single_result")
+            if sr:
+                self.result = self._dict_to_result(sr)
+            # 恢复多集结果
+            for br in cache.get("batch_results", []):
+                self.batch_results.append(self._dict_to_result(br))
+            # 恢复总结
+            self.cached_summary_md = cache.get("cached_summary_md", "")
+            # 恢复视图
+            self.view_mode = cache.get("view_mode", "single")
+            # 刷新界面显示
+            if self.result and not self.result.error:
+                self._display_results()
+            elif self.batch_results:
+                self._display_batch_results()
+            if self.cached_summary_md:
+                self.summary_preview_label.setText("📋 全局总结（已恢复）")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _result_to_dict(r):
+        """将 AnalysisResult 转为可 JSON 序列化的 dict"""
+        import base64, os
+        d = {
+            "video_info": None,
+            "transcript_text": r.transcript_text,
+            "transcript_segments": r.transcript_segments,
+            "enriched_segments": r.enriched_segments,
+            "bgm_info": r.bgm_info,
+            "scenes": [],
+            "hooks_analysis": r.hooks_analysis,
+            "script_structure": r.script_structure,
+            "character_map": r.character_map,
+            "rewrite_suggestions": r.rewrite_suggestions,
+            "north_america": r.north_america,
+            "full_report": r.full_report,
+            "error": r.error,
+            "hooks_analysis_concise": r.hooks_analysis_concise,
+            "script_structure_concise": r.script_structure_concise,
+            "character_map_concise": r.character_map_concise,
+            "rewrite_suggestions_concise": r.rewrite_suggestions_concise,
+            "north_america_concise": r.north_america_concise,
+        }
+        if r.video_info:
+            vi = r.video_info
+            d["video_info"] = {
+                "path": vi.path,
+                "duration": vi.duration,
+                "width": vi.width,
+                "height": vi.height,
+                "fps": vi.fps,
+                "size_mb": vi.size_mb,
+                "source": vi.source,
+                "platform": vi.platform,
+                "title": vi.title,
+            }
+        # scenes 含 frame_path（图片文件可能已不存在，仅保存路径）
+        for sc in r.scenes:
+            d["scenes"].append({
+                "index": sc.index,
+                "start": sc.start,
+                "end": sc.end,
+                "duration": sc.duration,
+                "mid_time": sc.mid_time,
+                "frame_path": sc.frame_path,
+            })
+        return d
+
+    @staticmethod
+    def _dict_to_result(d):
+        """将 dict 还原为 AnalysisResult"""
+        from core.pipeline import AnalysisResult, VideoInfo, SceneInfo
+        vi_dict = d.get("video_info")
+        vi = None
+        if vi_dict:
+            vi = VideoInfo(
+                path=vi_dict.get("path", ""),
+                duration=vi_dict.get("duration", 0.0),
+                width=vi_dict.get("width", 0),
+                height=vi_dict.get("height", 0),
+                fps=vi_dict.get("fps", 0.0),
+                size_mb=vi_dict.get("size_mb", 0.0),
+                source=vi_dict.get("source", "local"),
+                platform=vi_dict.get("platform", ""),
+                title=vi_dict.get("title", ""),
+            )
+        scenes = []
+        for sc_dict in d.get("scenes", []):
+            scenes.append(SceneInfo(
+                index=sc_dict.get("index", 0),
+                start=sc_dict.get("start", 0.0),
+                end=sc_dict.get("end", 0.0),
+                duration=sc_dict.get("duration", 0.0),
+                mid_time=sc_dict.get("mid_time", 0.0),
+                frame_path=sc_dict.get("frame_path"),
+            ))
+        return AnalysisResult(
+            video_info=vi,
+            transcript_text=d.get("transcript_text", ""),
+            transcript_segments=d.get("transcript_segments", []),
+            enriched_segments=d.get("enriched_segments", []),
+            bgm_info=d.get("bgm_info", ""),
+            scenes=scenes,
+            hooks_analysis=d.get("hooks_analysis", ""),
+            script_structure=d.get("script_structure", ""),
+            character_map=d.get("character_map", ""),
+            rewrite_suggestions=d.get("rewrite_suggestions", ""),
+            north_america=d.get("north_america", ""),
+            full_report=d.get("full_report", ""),
+            error=d.get("error", ""),
+            hooks_analysis_concise=d.get("hooks_analysis_concise", ""),
+            script_structure_concise=d.get("script_structure_concise", ""),
+            character_map_concise=d.get("character_map_concise", ""),
+            rewrite_suggestions_concise=d.get("rewrite_suggestions_concise", ""),
+            north_america_concise=d.get("north_america_concise", ""),
+        )
+
+    def closeEvent(self, event):
+        """重写关闭事件：保存分析数据"""
+        self._save_cache()
+        event.accept()

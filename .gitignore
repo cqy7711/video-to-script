@@ -1,23 +1,8 @@
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.venv/
-venv/
-
-# Distribution / build
+*.pyc
+*.pyo
+.DS_Store
+*.egg-info/
 dist/
 build/
-*.spec
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-
-# Whisper cache
-*.pt
+.env

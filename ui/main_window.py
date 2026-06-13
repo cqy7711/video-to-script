@@ -1683,8 +1683,8 @@ class MainWindow(QMainWindow):
     def _build_docx_for_result(self, result, selected_tabs, doc=None, ep_label="", version='full'):
         """为单个结果构建Word文档内容（可传入现有doc用于合并）"""
         from docx import Document
-from docx.shared import Inches, RGBColor, Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+        from docx.shared import Inches, RGBColor, Pt
+        from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 
         if doc is None:
             doc = Document()

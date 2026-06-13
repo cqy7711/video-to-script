@@ -976,8 +976,11 @@ class MainWindow(QMainWindow):
             )
             # 短视频提示
             if result.duration and result.duration < 15:
+                cookie_hint = ""
+                if "抖音" in result.platform:
+                    cookie_hint = " · 🔑 请在设置中配置浏览器Cookie以获取完整剧集"
                 self.url_file_detail.setText(
-                    f"平台: {result.platform} · 时长: {dur_str} · 大小: {size_mb:.1f}MB · ⚠️ 短视频/预告片"
+                    f"平台: {result.platform} · 时长: {dur_str} · 大小: {size_mb:.1f}MB · ⚠️ 可能是预告片{cookie_hint}"
                 )
             self.progress_bar.setValue(65)
             self.step_label.setText("✅ 视频下载完成，可以开始分析")
@@ -1034,7 +1037,8 @@ class MainWindow(QMainWindow):
         self.url_zone.preview_btn.setText("加载中...")
 
         def worker():
-            result = get_video_info_only(url)
+            cookie_browser = self.settings.get("cookie_browser", "")
+            result = get_video_info_only(url, cookie_browser=cookie_browser)
             self._preview_done_signal.emit(result)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -1051,11 +1055,12 @@ class MainWindow(QMainWindow):
         self.step_label.setStyleSheet("color: #007AFF; font-size: 12px;")
 
         cookie_file = self.settings.get("cookie_file", "")
+        cookie_browser = self.settings.get("cookie_browser", "")
 
         def worker():
             def progress_cb(msg):
                 self._download_progress_signal.emit(msg)
-            result = download_video(url, progress_cb=progress_cb, cookie_file=cookie_file)
+            result = download_video(url, progress_cb=progress_cb, cookie_file=cookie_file, cookie_browser=cookie_browser)
             self._download_done_signal.emit(result)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -2050,6 +2055,7 @@ class MainWindow(QMainWindow):
         self.step_label.setStyleSheet("color: #5856D6; font-size: 12px;")
 
         cookie_file = self.settings.get("cookie_file", "")
+        cookie_browser = self.settings.get("cookie_browser", "")
 
         def worker():
             total = len(urls)
@@ -2061,7 +2067,7 @@ class MainWindow(QMainWindow):
                 try:
                     def download_progress(msg):
                         self._batch_url_progress_signal.emit(i + 1, total, f"[{i+1}/{total}] 下载中: {msg}")
-                    dl_result = download_video(url, progress_cb=download_progress, cookie_file=cookie_file)
+                    dl_result = download_video(url, progress_cb=download_progress, cookie_file=cookie_file, cookie_browser=cookie_browser)
                     if not dl_result.success:
                         # 下载失败，跳过这集，记录错误
                         err_result = AnalysisResult(

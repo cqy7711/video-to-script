@@ -54,6 +54,7 @@ def download_video(
     output_dir: str = "",
     progress_cb: Optional[Callable] = None,
     cookie_file: str = "",
+    cookie_browser: str = "",
 ) -> DownloadResult:
     """
     从 URL 下载视频，返回下载结果。
@@ -63,6 +64,7 @@ def download_video(
         output_dir: 输出目录，默认临时目录
         progress_cb: 进度回调函数
         cookie_file: Cookie 文件路径（某些平台需要登录才能下载）
+        cookie_browser: 从浏览器直接读取Cookie（chrome/safari/edge/firefox等）
 
     Returns:
         DownloadResult 包含下载状态和视频信息
@@ -105,8 +107,14 @@ def download_video(
         "socket_timeout": 30,
     }
 
-    # Cookie 文件（用于需要登录的平台）
-    if cookie_file and os.path.exists(cookie_file):
+    # Cookie 认证（优先从浏览器读取，其次用文件）
+    if cookie_browser:
+        # yt-dlp 的 cookiesfrombrowser 参数：直接从浏览器读取 Cookie
+        # 支持 chrome, safari, edge, firefox, brave, opera, vivaldi
+        browser_name = cookie_browser.lower()
+        # yt-dlp 在 macOS 上 Safari 需要 keyring 访问权限
+        ydl_opts["cookiesfrombrowser"] = (browser_name,)
+    elif cookie_file and os.path.exists(cookie_file):
         ydl_opts["cookiefile"] = cookie_file
 
     # 抖音特殊处理：抖音短链需要先重定向
@@ -213,7 +221,7 @@ def _make_progress_hook(progress_cb, platform):
     return hook
 
 
-def get_video_info_only(url: str) -> DownloadResult:
+def get_video_info_only(url: str, cookie_browser: str = "") -> DownloadResult:
     """仅获取视频信息，不下载。用于预览链接信息。"""
     if not url or not url.strip().startswith("http"):
         return DownloadResult(success=False, error="请输入有效的视频链接")
@@ -227,6 +235,10 @@ def get_video_info_only(url: str) -> DownloadResult:
         "skip_download": True,
         "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     }
+
+    # Cookie 认证
+    if cookie_browser:
+        ydl_opts["cookiesfrombrowser"] = (cookie_browser.lower(),)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -246,12 +258,13 @@ def get_video_info_only(url: str) -> DownloadResult:
         return DownloadResult(success=False, error=str(e), platform=platform)
 
 
-def get_playlist_info(url: str) -> dict:
+def get_playlist_info(url: str, cookie_browser: str = "") -> dict:
     """
     检测链接是否为剧集/播放列表，返回分集列表信息。
 
     Args:
         url: 视频或剧集链接
+        cookie_browser: 从浏览器读取Cookie（chrome/safari/edge等）
 
     Returns:
         dict:
@@ -276,6 +289,10 @@ def get_playlist_info(url: str) -> dict:
         "extract_flat": "in",  # 获取播放列表但不下载每个视频的详细信息（更快）
         "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     }
+
+    # Cookie 认证
+    if cookie_browser:
+        ydl_opts["cookiesfrombrowser"] = (cookie_browser.lower(),)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

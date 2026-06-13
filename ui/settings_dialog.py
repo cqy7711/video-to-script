@@ -24,6 +24,7 @@ DEFAULT_SETTINGS = {
     "min_scene_duration": 2.0,
     "language": "",
     "cookie_file": "",
+    "cookie_browser": "",      # 从浏览器自动读取Cookie（chrome/safari/edge/firefox等）
 }
 
 
@@ -166,9 +167,34 @@ class SettingsDialog(QDialog):
         download_layout = QFormLayout()
         download_layout.setSpacing(10)
 
+        # ── 从浏览器读取 Cookie（推荐方式） ──
+        browser_row = QHBoxLayout()
+        self.cookie_browser_combo = QComboBox()
+        self.cookie_browser_combo.addItems([
+            "不使用", "Chrome", "Safari", "Edge", "Firefox", "Brave", "Opera", "Vivaldi"
+        ])
+        saved_browser = self.settings.get("cookie_browser", "")
+        if saved_browser:
+            idx = self.cookie_browser_combo.findText(saved_browser, Qt.MatchFixedString)
+            if idx >= 0:
+                self.cookie_browser_combo.setCurrentIndex(idx)
+        else:
+            self.cookie_browser_combo.setCurrentIndex(0)
+        browser_row.addWidget(self.cookie_browser_combo)
+        download_layout.addRow("浏览器 Cookie:", browser_row)
+
+        browser_hint = QLabel(
+            "🔒 推荐方式：直接从浏览器读取登录态（需浏览器已登录抖音/B站等）\n"
+            "macOS 可能需要输入系统密码来解密 Cookie"
+        )
+        browser_hint.setStyleSheet("color: #86868B; font-size: 11px;")
+        browser_hint.setWordWrap(True)
+        download_layout.addRow("", browser_hint)
+
+        # ── Cookie 文件（手动导出方式） ──
         cookie_row = QHBoxLayout()
         self.cookie_input = QLineEdit()
-        self.cookie_input.setPlaceholderText("导出浏览器的 Cookie 文件路径...")
+        self.cookie_input.setPlaceholderText("手动导出的 Cookie 文件路径（备选）...")
         self.cookie_input.setText(self.settings.get("cookie_file", ""))
         cookie_row.addWidget(self.cookie_input)
         cookie_browse = QPushButton("选择")
@@ -181,7 +207,10 @@ class SettingsDialog(QDialog):
         cookie_row.addWidget(cookie_browse)
         download_layout.addRow("Cookie 文件:", cookie_row)
 
-        cookie_hint = QLabel("💡 部分平台（抖音/B站）需要登录才能下载高清视频，可从浏览器导出 Cookie")
+        cookie_hint = QLabel(
+            '💡 抖音短剧需要登录才能下载完整剧集。优先选择「浏览器 Cookie」方式，'
+            '无需手动导出。如浏览器方式不可用，可用浏览器插件导出 Cookie 文件。'
+        )
         cookie_hint.setStyleSheet("color: #86868B; font-size: 11px;")
         cookie_hint.setWordWrap(True)
         download_layout.addRow("", cookie_hint)
@@ -205,6 +234,8 @@ class SettingsDialog(QDialog):
         threshold_map = {0: 25.0, 1: 30.0, 2: 35.0, 3: 40.0, 4: 50.0}
         self.settings["scene_threshold"] = threshold_map.get(self.threshold_combo.currentIndex(), 35.0)
         self.settings["cookie_file"] = self.cookie_input.text().strip()
+        browser_text = self.cookie_browser_combo.currentText()
+        self.settings["cookie_browser"] = "" if browser_text == "不使用" else browser_text
         try:
             save_settings(self.settings)
         except Exception as e:

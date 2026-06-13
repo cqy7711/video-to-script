@@ -323,7 +323,7 @@ class VideoToScriptPipeline:
                 {"role": "system", "content": "你是音频内容分析专家，擅长区分对白和背景音乐，并为台词标注说话人。只输出JSON格式，不要其他内容。"},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3, max_tokens=2000
+            temperature=0.3, max_tokens=4000
         )
         return resp.choices[0].message.content
 
@@ -498,7 +498,7 @@ class VideoToScriptPipeline:
             messages=[
                 {"role": "system", "content": "你是短剧钩子分析专家，擅长单集完播率、互动率和留存率的系统化分析。"},
                 {"role": "user", "content": prompt}
-            ], temperature=0.7, max_tokens=8000
+            ], temperature=0.7, max_tokens=12000
         )
         return resp.choices[0].message.content
 
@@ -517,30 +517,30 @@ class VideoToScriptPipeline:
                 "这是超长视频（>20分钟）。请按**每幕12个场景**分组，"
                 "计算总幕数。每幕内列出12个场景（最后一幕可能不足）。"
             )
-            max_tokens = 20000
+            max_tokens = 24000
         elif duration > 600:  # 10-20分钟
             detail_instruction = (
                 "这是长视频（10-20分钟）。请先**估算全部重点场景总数**，然后按**每幕10个场景**分组，"
                 "计算出一共需要多少幕（向上取整）。\n"
                 "**每一幕都必须完整写出来**，幕标题格式为「第一幕：[幕主题]」「第二幕：[幕主题]」等。"
             )
-            max_tokens = 17000
+            max_tokens = 21000
         elif duration > 300:  # 5-10分钟
             detail_instruction = (
                 "这是中等长度视频（5-10分钟）。请先**估算全部重点场景总数**，然后按**每幕8个场景**分组，"
                 "计算出一共需要多少幕（向上取整）。\n"
                 "**每一幕都必须完整写出来**，幕标题格式为「第一幕：[幕主题]」「第二幕：[幕主题]」等。"
             )
-            max_tokens = 15000
+            max_tokens = 18000
         elif duration > 180:  # 3-5分钟
             detail_instruction = (
                 "这是中短视频（3-5分钟）。请按**所有场景**逐一拆解，不需要分幕。"
                 "每个场景都要详细分析。"
             )
-            max_tokens = 13000
+            max_tokens = 16000
         else:  # <3分钟
             detail_instruction = "请按**所有场景**逐一拆解，不需要分幕。每个场景都要详细分析。"
-            max_tokens = 11000
+            max_tokens = 14000
 
         prompt = f"""你是专业的短剧剧本结构分析专家。请对以下视频进行完整的「结构化剧本与场景分析」。
 
@@ -782,7 +782,7 @@ class VideoToScriptPipeline:
             messages=[
                 {"role": "system", "content": "你是短剧人物关系分析专家，擅长角色塑造、人物弧光和关系张力分析。"},
                 {"role": "user", "content": prompt}
-            ], temperature=0.7, max_tokens=6000
+            ], temperature=0.7, max_tokens=10000
         )
         return resp.choices[0].message.content
 
@@ -906,7 +906,7 @@ class VideoToScriptPipeline:
             messages=[
                 {"role": "system", "content": "你是短剧改写顾问，擅长付费转化、钩子设计和多方向改写策略。"},
                 {"role": "user", "content": prompt}
-            ], temperature=0.7, max_tokens=9000
+            ], temperature=0.7, max_tokens=14000
         )
         return resp.choices[0].message.content
 
@@ -1028,7 +1028,7 @@ class VideoToScriptPipeline:
             messages=[
                 {"role": "system", "content": "你是专业的北美短剧改编顾问，精通 TikTok 美加区短剧市场，擅长将中国爆款短剧改编为北美市场版本。"},
                 {"role": "user", "content": prompt}
-            ], temperature=0.7, max_tokens=8000
+            ], temperature=0.7, max_tokens=12000
         )
         return resp.choices[0].message.content
 

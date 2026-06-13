@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFrame,
     QLabel, QPushButton, QTabWidget, QTextEdit, QProgressBar,
     QFileDialog, QApplication, QLineEdit, QStackedWidget, QDialog,
-    QScrollArea
+    QScrollArea, QCheckBox, QRadioButton, QButtonGroup, QComboBox,
+    QGroupBox, QDialogButtonBox, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, Slot, QMetaObject, Q_ARG, QSize
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage, QPixmap
@@ -98,6 +99,137 @@ class ContentExpandDialog(QDialog):
         btn_row.addWidget(btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
+
+
+class ExportDialog(QDialog):
+    """导出配置对话框：选择集数、Tab、格式、合并/单独"""
+
+    def __init__(self, episode_count, has_summary, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("导出设置")
+        self.setMinimumWidth(420)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        # ─── 1. 选择集数 ───
+        ep_group = QGroupBox("选择集数")
+        ep_layout = QVBoxLayout(ep_group)
+        ep_layout.setSpacing(6)
+
+        self.ep_all_cb = QCheckBox("全选")
+        self.ep_all_cb.setChecked(True)
+        ep_layout.addWidget(self.ep_all_cb)
+
+        self.ep_cbs = []
+        for i in range(episode_count):
+            cb = QCheckBox(f"第 {i+1} 集")
+            cb.setChecked(True)
+            cb.setProperty("ep_index", i)
+            ep_layout.addWidget(cb)
+            self.ep_cbs.append(cb)
+
+        self.summary_cb = None
+        if has_summary:
+            self.summary_cb = QCheckBox("📋 全局总结")
+            self.summary_cb.setChecked(True)
+            ep_layout.addWidget(self.summary_cb)
+
+        self.ep_all_cb.toggled.connect(self._toggle_all_episodes)
+        layout.addWidget(ep_group)
+
+        # ─── 2. 选择 Tab ───
+        tab_group = QGroupBox("选择分析内容")
+        tab_layout = QVBoxLayout(tab_group)
+        tab_layout.setSpacing(6)
+
+        self.tab_all_cb = QCheckBox("全选")
+        self.tab_all_cb.setChecked(True)
+        tab_layout.addWidget(self.tab_all_cb)
+
+        tab_items = [
+            ("hooks_analysis", "🪝 钩子分析"),
+            ("script_structure", "📜 结构化剧本"),
+            ("character_map", "👥 人物图谱"),
+            ("rewrite_suggestions", "✍️ 改写建议"),
+            ("north_america", "🌎 北美改编"),
+        ]
+        self.tab_cbs = []
+        for key, label in tab_items:
+            cb = QCheckBox(label)
+            cb.setChecked(True)
+            cb.setProperty("tab_key", key)
+            tab_layout.addWidget(cb)
+            self.tab_cbs.append(cb)
+
+        self.tab_all_cb.toggled.connect(self._toggle_all_tabs)
+        layout.addWidget(tab_group)
+
+        # ─── 3. 导出格式 ───
+        fmt_group = QGroupBox("导出格式")
+        fmt_layout = QHBoxLayout(fmt_group)
+        self.fmt_md_rb = QRadioButton("Markdown (.md)")
+        self.fmt_docx_rb = QRadioButton("Word (.docx)")
+        self.fmt_md_rb.setChecked(True)
+        fmt_btn_group = QButtonGroup(self)
+        fmt_btn_group.addButton(self.fmt_md_rb)
+        fmt_btn_group.addButton(self.fmt_docx_rb)
+        fmt_layout.addWidget(self.fmt_md_rb)
+        fmt_layout.addWidget(self.fmt_docx_rb)
+        layout.addWidget(fmt_group)
+
+        # ─── 4. 合并/单独 ───
+        mode_group = QGroupBox("导出方式")
+        mode_layout = QHBoxLayout(mode_group)
+        self.mode_merge_rb = QRadioButton("合并为一个文件")
+        self.mode_sep_rb = QRadioButton("每集单独导出")
+        self.mode_merge_rb.setChecked(True)
+        mode_btn_group = QButtonGroup(self)
+        mode_btn_group.addButton(self.mode_merge_rb)
+        mode_btn_group.addButton(self.mode_sep_rb)
+        mode_layout.addWidget(self.mode_merge_rb)
+        mode_layout.addWidget(self.mode_sep_rb)
+        layout.addWidget(mode_group)
+
+        # ─── 按钮 ───
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("导出")
+        btn_box.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def _toggle_all_episodes(self, checked):
+        for cb in self.ep_cbs:
+            cb.setChecked(checked)
+        if self.summary_cb:
+            self.summary_cb.setChecked(checked)
+
+    def _toggle_all_tabs(self, checked):
+        for cb in self.tab_cbs:
+            cb.setChecked(checked)
+
+    def get_selected_episodes(self):
+        """返回选中的集数索引列表"""
+        return [cb.property("ep_index") for cb in self.ep_cbs if cb.isChecked()]
+
+    def is_summary_selected(self):
+        return self.summary_cb.isChecked() if self.summary_cb else False
+
+    def get_selected_tabs(self):
+        """返回选中的tab key列表"""
+        return [cb.property("tab_key") for cb in self.tab_cbs if cb.isChecked()]
+
+    def get_format(self):
+        """返回 'md' 或 'docx'"""
+        return "md" if self.fmt_md_rb.isChecked() else "docx"
+
+    def is_merge(self):
+        """True=合并导出，False=单独导出"""
+        return self.mode_merge_rb.isChecked()
+
 
 from core.pipeline import VideoToScriptPipeline, AnalysisResult
 from core.downloader import download_video, get_video_info_only, detect_platform
@@ -649,14 +781,10 @@ class MainWindow(QMainWindow):
         # 底部
         bottom = QHBoxLayout()
         bottom.addStretch()
-        self.export_md_btn = QPushButton("📄 导出 Markdown")
-        self.export_md_btn.setObjectName("exportBtn")
-        self.export_md_btn.setEnabled(False)
-        bottom.addWidget(self.export_md_btn)
-        self.export_docx_btn = QPushButton("📝 导出 Word")
-        self.export_docx_btn.setObjectName("exportBtn")
-        self.export_docx_btn.setEnabled(False)
-        bottom.addWidget(self.export_docx_btn)
+        self.export_btn = QPushButton("📦 导出")
+        self.export_btn.setObjectName("exportBtn")
+        self.export_btn.setEnabled(False)
+        bottom.addWidget(self.export_btn)
         content_layout.addLayout(bottom)
 
         main_layout.addWidget(content, 1)
@@ -668,8 +796,7 @@ class MainWindow(QMainWindow):
         self.analyze_btn.clicked.connect(self._on_analyze)
         self.summary_btn.clicked.connect(self._on_generate_summary)
         self.settings_btn.clicked.connect(self._on_settings)
-        self.export_md_btn.clicked.connect(self._on_export_md)
-        self.export_docx_btn.clicked.connect(self._on_export_docx)
+        self.export_btn.clicked.connect(self._on_export)
         self.expand_btn.clicked.connect(self._on_expand_toggle)
         self.input_switch.mode_changed.connect(self._on_mode_changed)
         self.url_zone.download_requested.connect(self._on_download_video)
@@ -723,8 +850,7 @@ class MainWindow(QMainWindow):
                 self.view_summary_btn.setVisible(True)
 
             self._display_results()
-            self.export_md_btn.setEnabled(True)
-            self.export_docx_btn.setEnabled(True)
+            self.export_btn.setEnabled(True)
             # 显示展开按钮，并自动展开结果区域
             self.expand_btn.setVisible(True)
             self._set_results_expanded(True)
@@ -1324,155 +1450,235 @@ class MainWindow(QMainWindow):
             return desktop_en
         return home
 
-    def _on_export_md(self):
-        if not self.result or not self.result.full_report:
-            return
-        desktop = self._get_desktop_path()
-        default_path = os.path.join(desktop, "短剧拆解报告.md")
-        path, _ = QFileDialog.getSaveFileName(
-            self, "导出报告", default_path, "Markdown (*.md)"
-        )
-        if path:
-            try:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(self.result.full_report)
-                self.step_label.setText(f"✅ 已导出到桌面: {os.path.basename(path)}")
-                self.step_label.setStyleSheet("color: #34C759; font-size: 12px;")
-            except Exception as e:
-                self.step_label.setText(f"❌ 导出失败: {e}")
-                self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+    # ─── 导出功能 ───
 
-    def _on_export_docx(self):
-        if not self.result:
-            return
-        from docx import Document
-        from docx.shared import Pt, Inches, RGBColor
-        from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-        desktop = self._get_desktop_path()
-        default_path = os.path.join(desktop, "短剧拆解报告.docx")
-        path, _ = QFileDialog.getSaveFileName(
-            self, "导出 Word", default_path, "Word 文档 (*.docx)"
-        )
-        if not path:
-            return
-
-        doc = Document()
-        result = self.result
-        vi = result.video_info
-
-        # ─── 标题 ───
-        title = doc.add_heading("短剧拆解报告", level=0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # ─── 视频信息 ───
-        doc.add_heading("视频信息", level=1)
-        info_table = doc.add_table(rows=4, cols=2, style="Light List Accent 1")
-        info_data = [
-            ("文件", os.path.basename(vi.path)),
-            ("时长", f"{vi.duration:.1f}秒"),
-            ("分辨率", f"{vi.width}×{vi.height}"),
-            ("文件大小", f"{vi.size_mb:.1f}MB"),
-        ]
-        if vi.source == "url" and vi.platform:
-            info_data.append(("来源平台", vi.platform))
-        if vi.title:
-            info_data.append(("视频标题", vi.title))
-        # 动态扩展表格行
-        for i, (k, v) in enumerate(info_data):
-            if i >= len(info_table.rows):
-                info_table.add_row()
-            info_table.rows[i].cells[0].text = k
-            info_table.rows[i].cells[1].text = v
-
-        # ─── 背景音乐 ───
-        if result.bgm_info:
-            doc.add_heading("背景音乐", level=1)
-            doc.add_paragraph(result.bgm_info)
-
-        # ─── 转写文本 ───
-        doc.add_heading("转写文本", level=1)
-        enriched = result.enriched_segments
-        if enriched:
-            current_speaker = None
-            for seg in enriched:
-                stype = seg.get("type", "DIALOGUE")
-                speaker = seg.get("speaker", "未知角色")
-                text = seg.get("text", "")
-                start = seg.get("start", 0)
-                end = seg.get("end", 0)
-                time_tag = f"[{start}s-{end}s]"
-
-                if stype == "BGM":
-                    p = doc.add_paragraph()
-                    run = p.add_run(f"🎵 {time_tag} {text}")
-                    run.font.color.rgb = RGBColor(0xAE, 0xAE, 0xB2)
-                    run.italic = True
-                else:
-                    if speaker != current_speaker:
-                        p = doc.add_paragraph()
-                        run = p.add_run(f"👤 {speaker}")
-                        run.bold = True
-                        color_map = {
-                            "007AFF": RGBColor(0x00, 0x7A, 0xFF),
-                            "FF3B30": RGBColor(0xFF, 0x3B, 0x30),
-                            "34C759": RGBColor(0x34, 0xC7, 0x59),
-                            "FF9500": RGBColor(0xFF, 0x95, 0x00),
-                            "AF52DE": RGBColor(0xAF, 0x52, 0xDE),
-                        }
-                        c = self._speaker_color(speaker).lstrip("#")
-                        run.font.color.rgb = color_map.get(c, RGBColor(0x00, 0x7A, 0xFF))
-                        current_speaker = speaker
-                    p = doc.add_paragraph(f"    {time_tag} {text}")
+    def _on_export(self):
+        """打开导出配置对话框"""
+        # 确定可选集数
+        if self.batch_results:
+            episode_count = len(self.batch_results)
+        elif self.result and not self.result.error:
+            episode_count = 1
         else:
-            for seg in result.transcript_segments:
-                doc.add_paragraph(f"[{seg['start']}s-{seg['end']}s] {seg['text']}")
+            self.step_label.setText("❌ 没有可导出的分析结果")
+            self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            return
 
-        # ─── 场景切割 ───
-        doc.add_heading("场景切割", level=1)
-        for s in result.scenes:
-            p = doc.add_paragraph()
-            run = p.add_run(f"场景{s.index}")
-            run.bold = True
-            p.add_run(f" · {s.start}s → {s.end}s (时长{s.duration}s)")
-            if s.frame_path and os.path.exists(s.frame_path):
-                try:
-                    doc.add_picture(s.frame_path, width=Inches(4.5))
-                except Exception:
-                    pass
+        has_summary = bool(self.cached_summary_md)
+        dialog = ExportDialog(episode_count, has_summary, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
 
-        # ─── 钩子分析 ───
-        if result.hooks_analysis and not result.hooks_analysis.startswith("⚠️") and not result.hooks_analysis.startswith("❌"):
-            doc.add_heading("钩子结构分析", level=1)
-            self._add_markdown_to_doc(doc, result.hooks_analysis)
+        selected_episodes = dialog.get_selected_episodes()
+        selected_tabs = dialog.get_selected_tabs()
+        fmt = dialog.get_format()
+        merge = dialog.is_merge()
+        include_summary = dialog.is_summary_selected()
 
-        # ─── 结构化剧本 ───
-        if result.script_structure and not result.script_structure.startswith("❌"):
-            doc.add_heading("结构化剧本", level=1)
-            self._add_markdown_to_doc(doc, result.script_structure)
+        if not selected_episodes and not include_summary:
+            self.step_label.setText("❌ 请至少选择一个集数或全局总结")
+            self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            return
+        if not selected_tabs and not include_summary:
+            self.step_label.setText("❌ 请至少选择一个分析内容")
+            self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            return
 
-        # ─── 人物图谱 ───
-        if result.character_map and not result.character_map.startswith("❌"):
-            doc.add_heading("人物图谱", level=1)
-            self._add_markdown_to_doc(doc, result.character_map)
+        # 收集要导出的结果
+        results_to_export = []
+        if self.batch_results:
+            for idx in selected_episodes:
+                if idx < len(self.batch_results):
+                    results_to_export.append(self.batch_results[idx])
+        elif self.result and not self.result.error:
+            results_to_export.append(self.result)
 
-        # ─── 改写建议 ───
-        if result.rewrite_suggestions and not result.rewrite_suggestions.startswith("❌"):
-            doc.add_heading("改写建议", level=1)
-            self._add_markdown_to_doc(doc, result.rewrite_suggestions)
+        if not results_to_export and not include_summary:
+            self.step_label.setText("❌ 没有可导出的分析结果")
+            self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            return
 
-        # ─── 北美改编分析 ───
-        if result.north_america and not result.north_america.startswith("❌"):
-            doc.add_heading("北美改编可行性分析", level=1)
-            self._add_markdown_to_doc(doc, result.north_america)
+        # 按格式导出
+        exported_files = []
+        desktop = self._get_desktop_path()
 
         try:
-            doc.save(path)
-            self.step_label.setText(f"✅ 已导出 Word 到桌面: {os.path.basename(path)}")
-            self.step_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            if fmt == "md":
+                exported_files = self._export_markdown(results_to_export, selected_tabs, merge, include_summary, desktop)
+            else:
+                exported_files = self._export_docx(results_to_export, selected_tabs, merge, include_summary, desktop)
         except Exception as e:
-            self.step_label.setText(f"❌ Word导出失败: {e}")
+            self.step_label.setText(f"❌ 导出失败: {e}")
             self.step_label.setStyleSheet("color: #FF3B30; font-size: 12px;")
+            return
+
+        if exported_files:
+            file_list = "\n".join([f"  📄 {os.path.basename(f)}" for f in exported_files])
+            self.step_label.setText(f"✅ 已导出 {len(exported_files)} 个文件到桌面")
+            self.step_label.setStyleSheet("color: #34C759; font-size: 12px;")
+            # 弹窗提示
+            QMessageBox.information(
+                self, "导出完成",
+                f"已成功导出 {len(exported_files)} 个文件到桌面：\n\n{file_list}"
+            )
+
+    def _build_md_content(self, result, selected_tabs, ep_label=""):
+        """为单个结果构建Markdown内容"""
+        lines = []
+        if ep_label:
+            lines.append(f"# {ep_label}\n")
+
+        # 视频信息
+        if result.video_info:
+            vi = result.video_info
+            lines.append("## 视频信息\n")
+            lines.append(f"- 文件：{os.path.basename(vi.path) if vi.path else '未知'}")
+            lines.append(f"- 时长：{vi.duration:.1f}秒")
+            lines.append(f"- 分辨率：{vi.width}×{vi.height}")
+            lines.append(f"- 文件大小：{vi.size_mb:.1f}MB")
+            if vi.source == "url" and vi.platform:
+                lines.append(f"- 来源平台：{vi.platform}")
+            if vi.title:
+                lines.append(f"- 视频标题：{vi.title}")
+            lines.append("")
+
+        # 各Tab内容
+        tab_data = {
+            "hooks_analysis": ("钩子结构分析", result.hooks_analysis),
+            "script_structure": ("结构化剧本", result.script_structure),
+            "character_map": ("人物图谱", result.character_map),
+            "rewrite_suggestions": ("改写建议", result.rewrite_suggestions),
+            "north_america": ("北美改编可行性分析", result.north_america),
+        }
+        for tab_key, (title, content) in tab_data.items():
+            if tab_key in selected_tabs and content and not content.startswith("⚠️") and not content.startswith("❌"):
+                lines.append(f"## {title}\n")
+                lines.append(content)
+                lines.append("")
+
+        return "\n".join(lines)
+
+    def _build_docx_for_result(self, result, selected_tabs, doc=None, ep_label=""):
+        """为单个结果构建Word文档内容（可传入现有doc用于合并）"""
+        from docx import Document
+        from docx.shared import Inches, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        if doc is None:
+            doc = Document()
+
+        if ep_label:
+            heading = doc.add_heading(ep_label, level=1)
+            heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # 视频信息
+        if result.video_info:
+            vi = result.video_info
+            doc.add_heading("视频信息", level=2)
+            info_table = doc.add_table(rows=4, cols=2, style="Light List Accent 1")
+            info_data = [
+                ("文件", os.path.basename(vi.path) if vi.path else "未知"),
+                ("时长", f"{vi.duration:.1f}秒"),
+                ("分辨率", f"{vi.width}×{vi.height}"),
+                ("文件大小", f"{vi.size_mb:.1f}MB"),
+            ]
+            if vi.source == "url" and vi.platform:
+                info_data.append(("来源平台", vi.platform))
+            if vi.title:
+                info_data.append(("视频标题", vi.title))
+            for i, (k, v) in enumerate(info_data):
+                if i >= len(info_table.rows):
+                    info_table.add_row()
+                info_table.rows[i].cells[0].text = k
+                info_table.rows[i].cells[1].text = v
+
+        # 各Tab内容
+        tab_data = {
+            "hooks_analysis": ("钩子结构分析", result.hooks_analysis),
+            "script_structure": ("结构化剧本", result.script_structure),
+            "character_map": ("人物图谱", result.character_map),
+            "rewrite_suggestions": ("改写建议", result.rewrite_suggestions),
+            "north_america": ("北美改编可行性分析", result.north_america),
+        }
+        for tab_key, (title, content) in tab_data.items():
+            if tab_key in selected_tabs and content and not content.startswith("⚠️") and not content.startswith("❌"):
+                doc.add_heading(title, level=2)
+                self._add_markdown_to_doc(doc, content)
+
+        return doc
+
+    def _export_markdown(self, results, selected_tabs, merge, include_summary, desktop):
+        """导出Markdown文件"""
+        exported = []
+        if merge:
+            # 合并为一个文件
+            lines = ["# 短剧拆解报告\n"]
+            for i, r in enumerate(results):
+                ep_label = f"第 {i+1} 集" if len(results) > 1 else ""
+                lines.append(self._build_md_content(r, selected_tabs, ep_label))
+                lines.append("\n---\n")
+            if include_summary and self.cached_summary_md:
+                lines.append("# 全局总结\n")
+                lines.append(self.cached_summary_md)
+            content = "\n".join(lines)
+            path = os.path.join(desktop, "短剧拆解报告.md")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            exported.append(path)
+        else:
+            # 每集单独导出
+            for i, r in enumerate(results):
+                content = self._build_md_content(r, selected_tabs, f"第 {i+1} 集")
+                path = os.path.join(desktop, f"短剧拆解报告_第{i+1}集.md")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                exported.append(path)
+            if include_summary and self.cached_summary_md:
+                path = os.path.join(desktop, "短剧拆解报告_全局总结.md")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("# 全局总结\n\n" + self.cached_summary_md)
+                exported.append(path)
+        return exported
+
+    def _export_docx(self, results, selected_tabs, merge, include_summary, desktop):
+        """导出Word文件"""
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        exported = []
+
+        if merge:
+            # 合并为一个文件
+            doc = Document()
+            title = doc.add_heading("短剧拆解报告", level=0)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for i, r in enumerate(results):
+                ep_label = f"第 {i+1} 集" if len(results) > 1 else ""
+                self._build_docx_for_result(r, selected_tabs, doc, ep_label)
+            if include_summary and self.cached_summary_md:
+                doc.add_heading("全局总结", level=1)
+                self._add_markdown_to_doc(doc, self.cached_summary_md)
+            path = os.path.join(desktop, "短剧拆解报告.docx")
+            doc.save(path)
+            exported.append(path)
+        else:
+            # 每集单独导出
+            for i, r in enumerate(results):
+                doc = Document()
+                title = doc.add_heading(f"短剧拆解报告 — 第 {i+1} 集", level=0)
+                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                self._build_docx_for_result(r, selected_tabs, doc, f"第 {i+1} 集")
+                path = os.path.join(desktop, f"短剧拆解报告_第{i+1}集.docx")
+                doc.save(path)
+                exported.append(path)
+            if include_summary and self.cached_summary_md:
+                doc = Document()
+                title = doc.add_heading("短剧拆解报告 — 全局总结", level=0)
+                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                self._add_markdown_to_doc(doc, self.cached_summary_md)
+                path = os.path.join(desktop, "短剧拆解报告_全局总结.docx")
+                doc.save(path)
+                exported.append(path)
+        return exported
 
     @staticmethod
     def _add_markdown_to_doc(doc, md_text):
@@ -1554,11 +1760,13 @@ class MainWindow(QMainWindow):
             total = len(urls)
             for i, url in enumerate(urls):
                 # 报告当前进度
-                self._batch_url_progress_signal.emit(i + 1, total, f"正在下载第 {i+1}/{total} 集...")
+                self._batch_url_progress_signal.emit(i + 1, total, f"[{i+1}/{total}] 正在下载第 {i+1} 集...")
 
                 # 第一步：下载
                 try:
-                    dl_result = download_video(url, progress_cb=lambda msg: None, cookie_file=cookie_file)
+                    def download_progress(msg):
+                        self._batch_url_progress_signal.emit(i + 1, total, f"[{i+1}/{total}] 下载中: {msg}")
+                    dl_result = download_video(url, progress_cb=download_progress, cookie_file=cookie_file)
                     if not dl_result.success:
                         # 下载失败，跳过这集，记录错误
                         err_result = AnalysisResult(
@@ -1597,8 +1805,32 @@ class MainWindow(QMainWindow):
                     self.batch_results.append(err_result)
                     continue
 
-                # 第二步：分析
-                self._batch_url_progress_signal.emit(i + 1, total, f"第 {i+1}/{total} 集分析中...")
+                # 第二步：分析（细粒度进度）
+                def analysis_progress(msg):
+                    # 将pipeline内部进度映射为更友好的描述
+                    step_map = {
+                        "获取视频信息": "获取视频信息",
+                        "提取音频": "提取音频",
+                        "Whisper": "加载Whisper模型",
+                        "语音转写": "语音转写中",
+                        "场景检测": "场景检测",
+                        "AI 剧本分析": "AI分析中",
+                        "角色标注": "角色标注",
+                        "钩子分析完成": "✅ 钩子分析",
+                        "结构化剧本完成": "✅ 结构化剧本",
+                        "人物图谱完成": "✅ 人物图谱",
+                        "改写建议完成": "✅ 改写建议",
+                        "北美改编完成": "✅ 北美改编",
+                        "角色标注与BGM识别完成": "✅ 角色标注&BGM",
+                    }
+                    friendly_msg = msg
+                    for key, val in step_map.items():
+                        if key in msg:
+                            friendly_msg = val
+                            break
+                    self._batch_url_progress_signal.emit(i + 1, total, f"[{i+1}/{total}] {friendly_msg}")
+
+                self._batch_url_progress_signal.emit(i + 1, total, f"[{i+1}/{total}] 开始分析...")
 
                 try:
                     pipeline = VideoToScriptPipeline(
@@ -1612,7 +1844,7 @@ class MainWindow(QMainWindow):
                     )
                     result = pipeline.run(
                         video_path,
-                        progress_cb=lambda msg: None,
+                        progress_cb=analysis_progress,
                         source="url",
                         platform=platform,
                         video_title=title,
@@ -1641,8 +1873,30 @@ class MainWindow(QMainWindow):
 
     @Slot(int, int, str)
     def _handle_batch_url_progress(self, current, total, msg):
-        """多集批量分析进度更新"""
-        pct = int(current / total * 100) if total > 0 else 0
+        """多集批量分析进度更新（细粒度）"""
+        # 每集占 1/total 的进度，当前集内部进度从 msg 中推断
+        base_pct = int((current - 1) / total * 100) if total > 0 else 0
+        # 分析阶段的消息包含 ✅ 表示某模块完成，给予额外进度
+        if "✅" in msg:
+            step_pct = 85  # 至少有模块完成了
+        elif "开始分析" in msg:
+            step_pct = 30
+        elif "下载中" in msg or "正在下载" in msg:
+            step_pct = 15
+        elif "提取音频" in msg or "Whisper" in msg or "加载" in msg:
+            step_pct = 40
+        elif "转写" in msg:
+            step_pct = 50
+        elif "场景检测" in msg:
+            step_pct = 55
+        elif "AI分析" in msg or "角色标注" in msg:
+            step_pct = 60
+        else:
+            step_pct = 20
+        # 当前集内的进度占比 = step_pct / 100 * (1/total * 100)
+        ep_range = 100 / total if total > 0 else 100
+        pct = int(base_pct + step_pct / 100 * ep_range)
+        pct = min(pct, 99)
         self.progress_bar.setValue(pct)
         self.step_label.setText(msg)
         self.step_label.setStyleSheet("color: #5856D6; font-size: 12px;")
@@ -1684,8 +1938,7 @@ class MainWindow(QMainWindow):
             if len(self.batch_results) > 0:
                 self.episode_combo.setCurrentIndex(0)
 
-            self.export_md_btn.setEnabled(True)
-            self.export_docx_btn.setEnabled(True)
+            self.export_btn.setEnabled(True)
 
             # 显示批量汇总视图
             self._display_batch_results()

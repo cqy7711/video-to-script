@@ -1811,7 +1811,7 @@ class MainWindow(QMainWindow):
         支持：标题(1-4级)、粗体、斜体、无序列表、有序列表、
               引用块、代码块、分隔线、内联格式。
         """
-        from docx.shared import Pt, RGBColor
+        from docx.shared import Pt, RGBColor, Inches
         import re
 
         lines = md_text.split("\n")
